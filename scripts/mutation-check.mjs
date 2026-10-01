@@ -69,10 +69,13 @@ const mutations = [
     replace: 'if (raw === \'\') return undefined',
   },
   {
-    name: 'selection detection stops rejecting text-entry controls',
+    // Both call sites of the text-entry guard are removed together, so neither
+    // can keep the behaviour alive on its own. This is the mutation that proves
+    // the input/textarea/contenteditable cases genuinely pin the guard.
+    name: 'selection detection stops rejecting text-entry controls at every call site',
     file: 'src/client/selection.ts',
-    find: 'if (isTextEntry(target) || isOwnSurface(target)) return undefined',
-    replace: 'if (false) return undefined',
+    find: 'if (isTextEntry(target) || isOwnSurface(target)) return undefined\n    // A selection made inside a text-entry control is reported by the control,\n    // not by the document: bail rather than opening over someone\'s draft.\n    if (target.closest(\'input, textarea, [contenteditable]:not([contenteditable="false"])\') !== null) return undefined',
+    replace: 'if (isOwnSurface(target)) return undefined',
   },
   {
     name: 'routes stop enforcing the cross-site fence',
@@ -119,6 +122,8 @@ const mutations = [
 ]
 
 let survivors = 0
+let unexpected = 0
+let equivalentSurvivors = 0
 for (const mutation of mutations) {
   const scratch = mkdtempSync(join(tmpdir(), 'dsh-sidebrowser-mutation-'))
   try {
@@ -132,7 +137,7 @@ for (const mutation of mutations) {
     const original = readFileSync(target, 'utf8')
     if (!original.includes(mutation.find)) {
       console.log(`SKIP  (anchor not found) ${mutation.name}`)
-      survivors += 1
+      unexpected += 1
       continue
     }
     writeFileSync(target, original.replace(mutation.find, mutation.replace), 'utf8')
@@ -141,11 +146,22 @@ for (const mutation of mutations) {
       encoding: 'utf8',
     })
     const caught = result.status !== 0
-    console.log(`${caught ? 'CAUGHT' : 'SURVIVED'}  ${mutation.name}`)
-    if (!caught) survivors += 1
+    if (caught) {
+      console.log(`CAUGHT  ${mutation.name}`)
+    } else if (mutation.equivalent === true) {
+      // A survivor that is supposed to survive: the mutation leaves the pinned
+      // behaviour intact, so a green suite is the correct outcome.
+      console.log(`EQUIV   ${mutation.name}`)
+      equivalentSurvivors += 1
+    } else {
+      console.log(`SURVIVED  ${mutation.name}`)
+      survivors += 1
+    }
   } finally {
     rmSync(scratch, { recursive: true, force: true })
   }
 }
-console.log(`\n${mutations.length - survivors}/${mutations.length} mutations caught`)
-process.exit(survivors === 0 ? 0 : 1)
+const total = mutations.length
+console.log(`\n${total - survivors - equivalentSurvivors}/${total - equivalentSurvivors} behavioural mutations caught`)
+console.log(`${equivalentSurvivors} equivalent mutant(s) survived, as expected`)
+if (survivors > 0 || unexpected > 0) process.exit(1)

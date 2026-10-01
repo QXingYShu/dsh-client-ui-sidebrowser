@@ -18,3 +18,8 @@ Thumbs.db
 # Local scratch
 .smoke/
 *.tsbuildinfo
+
+# Machine-specific local install notes. This file documents the exact edits to
+# this developer's own `~/.dsh` profile, including absolute paths, so it must not
+# be published with the plugin.
+INSTALL-LOCAL.md

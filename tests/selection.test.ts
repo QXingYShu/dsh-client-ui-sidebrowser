@@ -240,12 +240,32 @@ describe('selection detection', () => {
     expect(detected?.kind).toBe('phrase')
   })
 
-  it('refuses a selection inside a text input', () => {
+  it('refuses a selection inside a text input even when the selection has text', () => {
     // A popup over a field the user is typing into steals the click that was
     // meant to place a cursor; the control owns its own selection.
-    mount('<div data-conversation><input id="field" value="selected text" /></div>')
+    //
+    // The selection here is given real text on purpose. An `<input>` cannot hold
+    // child nodes, so its range anchors in the wrapping element and the
+    // document's selection reports an empty string for it — which would make the
+    // popup absent for a reason that has nothing to do with the text-entry
+    // guard. Asserting against an empty selection would pass even with the guard
+    // deleted, so this case forces a non-empty selection to reach the guard.
+    mount('<div data-conversation><input id="field" /></div>')
+    const host = document.querySelector('[data-conversation]') as HTMLElement
     const field = document.getElementById('field') as HTMLElement
-    expect(detectSelection(selectText(field))).toBeUndefined()
+    const text = document.createTextNode('a selection over a field')
+    host.insertBefore(text, field)
+    const range = document.createRange()
+    range.selectNodeContents(text)
+    Object.defineProperty(range, 'getBoundingClientRect', { value: () => rect(), configurable: true })
+    const live = window.getSelection()
+    live?.removeAllRanges()
+    live?.addRange(range)
+    // The guard is only reachable if the selection is genuinely non-empty.
+    expect(live?.toString()).toBe('a selection over a field')
+    const event = new MouseEvent('mouseup', { bubbles: true })
+    Object.defineProperty(event, 'target', { value: field, configurable: true })
+    expect(detectSelection(event)).toBeUndefined()
   })
 
   it('refuses a selection inside a textarea', () => {
