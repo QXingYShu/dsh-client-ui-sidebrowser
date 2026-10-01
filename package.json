@@ -1,0 +1,96 @@
+{
+  "name": "@dsh-external/dsh-client-ui-sidebrowser",
+  "description": "Right-sidebar browser for the DeepSeek Harness Web GUI: open DeepSeek web, Bing, 百度/有道翻译 or any URL beside your conversation, let the agent read and operate the page, and act on selected text with AI解释 (through the DeepSeek web session) or 翻译.",
+  "version": "0.1.0",
+  "private": false,
+  "icon": "icon.svg",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.0-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.2.0-rc.1",
+    "react": "^18.2.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@tsdown/css": "0.22.2",
+    "@deepseek-ai/dsh-client-ui-layout": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-sidebar": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-sidebar-browser": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-sidebar-right": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "@types/node": "^22.20.0",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "^18.3.5",
+    "@types/ws": "^8.5.13",
+    "jsdom": "^25.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "0.22.2",
+    "typescript": "~5.7.2",
+    "vitest": "^4.1.11"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.js.map",
+    "src",
+    "scripts",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dsh-sidebrowser/dsh-client-ui-sidebrowser.git"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "bundle": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify:bundle": "node scripts/verify-client-bundle.mjs",
+    "prepack": "pnpm run build"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "browser",
+    "cdp",
+    "translation"
+  ]
+}

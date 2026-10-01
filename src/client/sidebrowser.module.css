@@ -1,0 +1,432 @@
+/*
+ * Styling for the side-browser tab body and the selection mini-popup.
+ *
+ * Every colour, radius and font comes from the shell's theme tokens
+ * (`--dsw-alias-*`, `--dsw-specific-*`, `--dsw-radius-*`), so the panel
+ * follows the user's light/dark theme and any installed skin without this file
+ * knowing anything about either. The only literal values here are hairlines and
+ * the screenshot's aspect box, which are geometry rather than theme.
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  padding: 8px;
+  box-sizing: border-box;
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-family);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* --- Top bar: nav buttons, URL field, window toggle ------------------------ */
+
+.topBar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.iconButton:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
+}
+
+.iconButtonActive {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.urlBar {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  outline: none;
+}
+
+.urlBar:focus {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+/* --- Connection and error lines ------------------------------------------- */
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.statusLine[data-tone='error'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.statusLine[data-tone='busy'] {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-idle-primary);
+  flex-shrink: 0;
+}
+
+.statusDot[data-phase='ready'] {
+  background: var(--dsw-alias-state-success-primary);
+}
+
+.statusDot[data-phase='starting'] {
+  background: var(--dsw-alias-state-warn-primary);
+}
+
+.statusDot[data-phase='closed'],
+.statusDot[data-phase='unavailable'] {
+  background: var(--dsw-alias-state-error-primary);
+}
+
+.statusText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Screenshot viewport --------------------------------------------------- */
+
+.viewport {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.viewport[data-interactive='true'] {
+  cursor: crosshair;
+}
+
+.frame {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  /* The frame is a JPEG of a desktop window; letting the browser smooth it
+     down makes small text legible instead of merely present. */
+  image-rendering: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.viewportPlaceholder {
+  margin: auto;
+  padding: 16px;
+  text-align: center;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.hint {
+  flex-shrink: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* --- Browser tab strip ----------------------------------------------------- */
+
+.tabStrip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tabChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 140px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tabChip[data-active='true'] {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.tabChipLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dsw-radius-xs);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.tabClose:hover {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* --- Quick-launch shortcuts ------------------------------------------------ */
+
+.shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.shortcutButton {
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.shortcutButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.shortcutForm {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.shortcutInput {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-xs);
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.textButton {
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-xs);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.textButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.textButton:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
+}
+
+/* --- Page text view -------------------------------------------------------- */
+
+.textView {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  scrollbar-width: thin;
+}
+
+.collapsed {
+  flex: 0 0 auto;
+}
+
+/* --- Selection mini-popup -------------------------------------------------- */
+
+.popupLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  /* The layer is click-through; only the popup box itself takes pointers, so
+     the conversation under it stays fully usable. */
+  pointer-events: none;
+}
+
+.popup {
+  position: absolute;
+  pointer-events: auto;
+  max-width: 320px;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-overlay);
+  box-shadow: var(--dsw-elevation-prominent);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-family);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.popupRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.popupSelection {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.popupAction {
+  padding: 3px 10px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-button-elevated-fill);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.popupAction:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.popupAction:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
+}
+
+.popupPrimary {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-button-primary-fill);
+}
+
+.popupPrimary:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.popupResult {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  scrollbar-width: thin;
+}
+
+.popupStatus {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.popupError {
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.popupWarning {
+  color: var(--dsw-alias-state-warn-primary);
+  font-size: 12px;
+  word-break: break-word;
+}
