@@ -106,10 +106,13 @@ async function expectBrowserError(operation: () => Promise<unknown>, code: strin
     return undefined
   })()
   if (error === undefined) throw new Error(`expected the call to reject with ${code}, but it resolved`)
-  expect(error).toBeInstanceOf(BrowserError)
-  expect((error as InstanceType<typeof BrowserError>).code).toBe(code)
-  expect((error as InstanceType<typeof BrowserError>).name).toBe('BrowserError')
-  return error as InstanceType<typeof BrowserError>
+  // The class identity, the stable code, and the name are each asserted: the
+  // route layer checks `instanceof` for the status mapping while the tool layer
+  // branches on `code`, so a plain `Error` must not slip through either path.
+  expect(error).toBeInstanceOf(BrowserErrorClass)
+  expect((error as BrowserError).code).toBe(code)
+  expect((error as BrowserError).name).toBe('BrowserError')
+  return error as BrowserError
 }
 
 beforeEach(() => {
