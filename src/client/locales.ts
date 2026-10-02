@@ -19,8 +19,8 @@
 export const zh = {
   // --- Panel ---------------------------------------------------------------
   'panel.title': '侧边浏览器',
-  'panel.hint': '这是主控窗口的实时截图，页面本身在主机窗口中可交互。',
-  'panel.hintShort': '实时截图 · 在主机窗口中可交互',
+  'panel.hint': '这是主机浏览器的实时画面，页面就在这里，不必再开一个窗口。',
+  'panel.hintShort': '实时画面 · 无需另开窗口',
   'panel.nav.back': '后退',
   'panel.nav.forward': '前进',
   'panel.nav.reload': '刷新',
@@ -135,8 +135,8 @@ export const zh = {
 /** en dictionary; keyed identically to {@link zh}. */
 export const en: Record<keyof typeof zh, string> = {
   'panel.title': 'Side browser',
-  'panel.hint': 'The page is a real Chrome window on your desktop; this is its live view.',
-  'panel.hintShort': 'Live view · a browser window on your desktop',
+  'panel.hint': 'This is the live view of the browser running on the host; the page is here, not in a separate window.',
+  'panel.hintShort': 'Live view · no separate window',
   'panel.nav.back': 'Back',
   'panel.nav.forward': 'Forward',
   'panel.nav.reload': 'Reload',

@@ -91,6 +91,22 @@ function isUntrackableUrl(url: unknown): boolean {
   return UNTRACKABLE_URL_PREFIXES.some(prefix => url.startsWith(prefix))
 }
 
+/**
+ * Whether a failure means "this tab's CDP session is gone".
+ *
+ * A session detaches in ways `Target.targetDestroyed` never reports: the
+ * renderer is discarded, the target navigates cross-process, or Chrome reuses
+ * the id. The tab then stays in the strip - still selected, still showing an
+ * empty url - and every command on it fails with `Session with given id not
+ * found`, which is what a user sees as a panel that no longer works.
+ * @param error - the failure a command produced.
+ * @returns whether it denotes a dead session.
+ */
+function isDeadSessionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /Session with given id not found|No target with given id|Inspector detached|Target closed|Target crashed/i.test(message)
+}
+
 /** Read a capture result's PNG payload, refusing an empty one. */
 function requireFrameData(result: { data?: unknown }): string {
   const data = result.data
@@ -581,6 +597,34 @@ export class BrowserDriver {
     }
     this.syncSelectionFlag()
   }
+  /**
+   * Run a command against a tab, healing it if its CDP session has died.
+   *
+   * A dead session used to surface as a raw `Page.navigate failed (-32001):
+   * Session with given id not found` in the panel, with the dead tab still
+   * selected - so every later action failed the same way and the strip kept
+   * jumping. Instead the tab is dropped (which clears the selection when it
+   * pointed at it) and the command is retried once against whatever is live.
+   * @param tabId - the tab the caller asked for, if any.
+   * @param run - performs one attempt with a resolved tab.
+   * @returns the attempt's result.
+   */
+  private async withLiveTab<T>(tabId: string | undefined, run: (tab: BrowserTabInfo) => Promise<T>): Promise<T> {
+    try {
+      return await run(await this.requireTab(tabId))
+    } catch (error) {
+      if (!isDeadSessionError(error)) throw error
+      const dead = tabId ?? this.selectedTabId
+      const tab = dead === undefined ? undefined : this.tabs.get(dead)
+      if (tab !== undefined) {
+        this.dropTab(tab.id)
+        // A resync re-adopts whatever Chrome really has, so the retry has a
+        // live page to act on rather than another corpse.
+        await this.refreshTargets().catch(() => undefined)
+      }
+      return await run(await this.requireTab(tabId))
+    }
+  }
 
   /**
    * Drop tabs the browser destroys on its own, without waiting for a resync.
@@ -818,19 +862,21 @@ export class BrowserDriver {
    */
   async navigate(target: string, tabId?: string): Promise<PageSnapshot> {
     const url = resolveNavigationTarget(target)
-    const tab = await this.resolveTab(tabId)
-    if (tab === undefined) return await this.openAndSnapshot(url)
-    const client = await this.requireClient()
-    await client.send('Page.navigate', { url }, tab.sessionId)
-    // A navigation is about to replace the execution context, so the cached
-    // global handle is dropped now rather than being recovered by the retry path.
-    this.globalObjectIds.delete(tab.sessionId)
-    // The next document may render at a different pixel ratio, so the one
-    // cached for this session is no longer valid.
-    this.devicePixelRatios.delete(tab.sessionId)
-    await this.waitForLoad(tab.sessionId)
-    tab.url = url
-    return await this.snapshot(tabId)
+    // Cold start: there is no tab to navigate yet, so open one.
+    if (await this.resolveTab(tabId) === undefined) return await this.openAndSnapshot(url)
+    return await this.withLiveTab(tabId, async tab => {
+      const client = await this.requireClient()
+      await client.send('Page.navigate', { url }, tab.sessionId)
+      // A navigation is about to replace the execution context, so the cached
+      // global handle is dropped now rather than being recovered by the retry path.
+      this.globalObjectIds.delete(tab.sessionId)
+      // The next document may render at a different pixel ratio, so the one
+      // cached for this session is no longer valid.
+      this.devicePixelRatios.delete(tab.sessionId)
+      await this.waitForLoad(tab.sessionId)
+      tab.url = url
+      return await this.snapshot(tab.id)
+    })
   }
 
   /**
@@ -875,20 +921,20 @@ export class BrowserDriver {
    * @returns the resulting snapshot.
    */
   private async historyStep(delta: -1 | 1, tabId?: string): Promise<PageSnapshot> {
-    const tab = await this.resolveTab(tabId)
-    if (tab === undefined) throw new BrowserError('no-tab', 'there is no page open to navigate')
-    const client = await this.requireClient()
-    // Back and forward are the same operation against the history index; the
-    // direction is `delta`, not a different command.
-    const history = await client.sendObject('Page.getNavigationHistory', {}, tab.sessionId)
-    const entries = Array.isArray(history.entries) ? history.entries : []
-    const index = typeof history.currentIndex === 'number' ? history.currentIndex : 0
-    const target = index + delta
-    const entry = entries[target] as { id?: number } | undefined
-    if (entry === undefined || typeof entry.id !== 'number') return await this.snapshot(tabId)
-    await client.send('Page.navigateToHistoryEntry', { entryId: entry.id }, tab.sessionId)
-    await this.waitForLoad(tab.sessionId)
-    return await this.snapshot(tabId)
+    return await this.withLiveTab(tabId, async tab => {
+      const client = await this.requireClient()
+      // Back and forward are the same operation against the history index; the
+      // direction is `delta`, not a different command.
+      const history = await client.sendObject('Page.getNavigationHistory', {}, tab.sessionId)
+      const entries = Array.isArray(history.entries) ? history.entries : []
+      const index = typeof history.currentIndex === 'number' ? history.currentIndex : 0
+      const target = index + delta
+      const entry = entries[target] as { id?: number } | undefined
+      if (entry === undefined || typeof entry.id !== 'number') return await this.snapshot(tab.id)
+      await client.send('Page.navigateToHistoryEntry', { entryId: entry.id }, tab.sessionId)
+      await this.waitForLoad(tab.sessionId)
+      return await this.snapshot(tab.id)
+    })
   }
 
   /**
@@ -898,12 +944,12 @@ export class BrowserDriver {
    * @returns the resulting snapshot.
    */
   async reload(tabId?: string, ignoreCache = false): Promise<PageSnapshot> {
-    const tab = await this.resolveTab(tabId)
-    if (tab === undefined) throw new BrowserError('no-tab', 'there is no page open to reload')
-    const client = await this.requireClient()
-    await client.send('Page.reload', { ignoreCache }, tab.sessionId)
-    await this.waitForLoad(tab.sessionId)
-    return await this.snapshot(tabId)
+    return await this.withLiveTab(tabId, async tab => {
+      const client = await this.requireClient()
+      await client.send('Page.reload', { ignoreCache }, tab.sessionId)
+      await this.waitForLoad(tab.sessionId)
+      return await this.snapshot(tab.id)
+    })
   }
 
   /**
@@ -1149,26 +1195,31 @@ export class BrowserDriver {
    * @throws {BrowserError} when neither/both click modes are given, or the selector matches nothing.
    */
   async click(opts: { selector?: string, x?: number, y?: number, tabId?: string }): Promise<void> {
-    const tab = await this.requireTab(opts.tabId)
-    const client = await this.requireClient()
-    const bySelector = opts.selector !== undefined && opts.selector !== ''
-    const byPoint = typeof opts.x === 'number' && typeof opts.y === 'number'
-    if (bySelector === byPoint) {
-      throw new BrowserError('bad-click', 'click needs either a selector or both x and y coordinates')
-    }
-    let x = opts.x as number
-    let y = opts.y as number
-    if (bySelector) {
-      const box = await this.evaluate(client, tab.sessionId, CLICK_HELPER_EXPRESSION, [opts.selector])
-      if (typeof box !== 'object' || box === null) throw new BrowserError('selector-not-found', `no element matched selector ${JSON.stringify(opts.selector)}`)
-      const point = box as { x?: unknown, y?: unknown }
-      if (typeof point.x !== 'number' || typeof point.y !== 'number') {
-        throw new BrowserError('selector-not-found', `the element matching ${JSON.stringify(opts.selector)} is not visible`)
+    // The arguments are validated INSIDE the live-tab wrapper, so that "no
+    // browser is attached" is still reported ahead of a malformed click: when
+    // nothing is attached, that is the real problem, and `bad-click` would send
+    // the user looking at their own call instead.
+    await this.withLiveTab(opts.tabId, async tab => {
+      const client = await this.requireClient()
+      const bySelector = opts.selector !== undefined && opts.selector !== ''
+      const byPoint = typeof opts.x === 'number' && typeof opts.y === 'number'
+      if (bySelector === byPoint) {
+        throw new BrowserError('bad-click', 'click needs either a selector or both x and y coordinates')
       }
-      x = point.x
-      y = point.y
-    }
-    await this.synthesizeClick(client, tab.sessionId, x, y)
+      let x = opts.x as number
+      let y = opts.y as number
+      if (bySelector) {
+        const box = await this.evaluate(client, tab.sessionId, CLICK_HELPER_EXPRESSION, [opts.selector])
+        if (typeof box !== 'object' || box === null) throw new BrowserError('selector-not-found', `no element matched selector ${JSON.stringify(opts.selector)}`)
+        const point = box as { x?: unknown, y?: unknown }
+        if (typeof point.x !== 'number' || typeof point.y !== 'number') {
+          throw new BrowserError('selector-not-found', `the element matching ${JSON.stringify(opts.selector)} is not visible`)
+        }
+        x = point.x
+        y = point.y
+      }
+      await this.synthesizeClick(client, tab.sessionId, x, y)
+    })
   }
 
   /**
@@ -1199,13 +1250,14 @@ export class BrowserDriver {
    * @throws {BrowserError} when the selector matches nothing or is not focusable.
    */
   async typeText(text: string, selector?: string, tabId?: string): Promise<void> {
-    const tab = await this.requireTab(tabId)
-    const client = await this.requireClient()
-    if (selector !== undefined && selector !== '') {
-      const focused = await this.evaluate(client, tab.sessionId, FOCUS_HELPER_EXPRESSION, [selector])
-      if (focused !== true) throw new BrowserError('selector-not-found', `could not focus an element matching ${JSON.stringify(selector)}`)
-    }
-    await client.send('Input.insertText', { text }, tab.sessionId)
+    await this.withLiveTab(tabId, async tab => {
+      const client = await this.requireClient()
+      if (selector !== undefined && selector !== '') {
+        const focused = await this.evaluate(client, tab.sessionId, FOCUS_HELPER_EXPRESSION, [selector])
+        if (focused !== true) throw new BrowserError('selector-not-found', `could not focus an element matching ${JSON.stringify(selector)}`)
+      }
+      await client.send('Input.insertText', { text }, tab.sessionId)
+    })
   }
 
   /**
@@ -1221,11 +1273,12 @@ export class BrowserDriver {
    */
   async pressKey(key: string, tabId?: string): Promise<void> {
     if (key.trim() === '') throw new BrowserError('bad-key', 'key must not be empty')
-    const tab = await this.requireTab(tabId)
-    const client = await this.requireClient()
-    const params = { key, code: key, windowsVirtualKeyCode: virtualKeyCode(key), nativeVirtualKeyCode: virtualKeyCode(key) }
-    await client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...params }, tab.sessionId)
-    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...params }, tab.sessionId)
+    await this.withLiveTab(tabId, async tab => {
+      const client = await this.requireClient()
+      const params = { key, code: key, windowsVirtualKeyCode: virtualKeyCode(key), nativeVirtualKeyCode: virtualKeyCode(key) }
+      await client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...params }, tab.sessionId)
+      await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...params }, tab.sessionId)
+    })
   }
 
   /**
@@ -1235,9 +1288,10 @@ export class BrowserDriver {
    * @returns void.
    */
   async scroll(deltaY: number, tabId?: string): Promise<void> {
-    const tab = await this.requireTab(tabId)
-    const client = await this.requireClient()
-    await client.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 0, y: 0, deltaX: 0, deltaY }, tab.sessionId)
+    await this.withLiveTab(tabId, async tab => {
+      const client = await this.requireClient()
+      await client.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 0, y: 0, deltaX: 0, deltaY }, tab.sessionId)
+    })
   }
 
   /**
@@ -1253,19 +1307,20 @@ export class BrowserDriver {
    * @throws {BrowserError} when no page is open.
    */
   async extractText(options: ExtractTextOptions = {}, tabId?: string): Promise<ExtractedText> {
-    const tab = await this.requireTab(tabId)
-    const client = await this.requireClient()
     const cap = Math.min(Math.max(options.maxChars ?? DEFAULT_MAX_CHARS, 200), MAX_TEXT_CEILING)
-    const raw = await this.evaluate(client, tab.sessionId, EXTRACT_TEXT_EXPRESSION, [cap, options.includeInventory === true])
-    if (typeof raw !== 'object' || raw === null) throw new BrowserError('extract-failed', 'the page returned an unreadable text extraction')
-    const extracted = raw as { title?: unknown, url?: unknown, text?: unknown, truncated?: unknown, inventory?: unknown }
-    return {
-      title: typeof extracted.title === 'string' ? extracted.title : '',
-      url: typeof extracted.url === 'string' ? extracted.url : tab.url,
-      text: typeof extracted.text === 'string' ? extracted.text : '',
-      truncated: extracted.truncated === true,
-      ...(typeof extracted.inventory === 'object' && extracted.inventory !== null ? { inventory: extracted.inventory as PageInventory } : {}),
-    }
+    return await this.withLiveTab(tabId, async tab => {
+      const client = await this.requireClient()
+      const raw = await this.evaluate(client, tab.sessionId, EXTRACT_TEXT_EXPRESSION, [cap, options.includeInventory === true])
+      if (typeof raw !== 'object' || raw === null) throw new BrowserError('extract-failed', 'the page returned an unreadable text extraction')
+      const extracted = raw as { title?: unknown, url?: unknown, text?: unknown, truncated?: unknown, inventory?: unknown }
+      return {
+        title: typeof extracted.title === 'string' ? extracted.title : '',
+        url: typeof extracted.url === 'string' ? extracted.url : tab.url,
+        text: typeof extracted.text === 'string' ? extracted.text : '',
+        truncated: extracted.truncated === true,
+        ...(typeof extracted.inventory === 'object' && extracted.inventory !== null ? { inventory: extracted.inventory as PageInventory } : {}),
+      }
+    })
   }
 
   /**
@@ -1286,9 +1341,26 @@ export class BrowserDriver {
    * @throws {BrowserError} when no page is open or capture returns nothing.
    */
   async captureScreenshot(fullPage = false, tabId?: string, scale = 1): Promise<string> {
-    const tab = await this.requireTab(tabId)
+    return await this.withLiveTab(tabId, async tab => this.captureOnTab(tab, fullPage, scale))
+  }
+
+  /**
+   * Capture one tab's page, assuming its session is alive.
+   * @param tab - the resolved tab.
+   * @param fullPage - capture beyond the viewport.
+   * @param scale - downsample factor.
+   * @returns the base64 PNG data.
+   */
+  private async captureOnTab(tab: BrowserTabInfo, fullPage: boolean, scale: number): Promise<string> {
     const client = await this.requireClient()
-    const metrics = await client.sendObject('Page.getLayoutMetrics', {}, tab.sessionId).catch(() => undefined)
+    // A dead session must NOT be swallowed here: metrics are only best-effort,
+    // but "the session is gone" is not a missing measurement - letting it pass
+    // turned a dead tab into a generic `capture-failed`, which is both a lie
+    // about the cause and invisible to the healing path.
+    const metrics = await client.sendObject('Page.getLayoutMetrics', {}, tab.sessionId).catch((error: unknown) => {
+      if (isDeadSessionError(error)) throw error
+      return undefined
+    })
     const viewport = (metrics as { cssLayoutViewport?: { clientWidth?: number, clientHeight?: number } } | undefined)?.cssLayoutViewport
     const content = (metrics as { cssContentSize?: { width?: number, height?: number } } | undefined)?.cssContentSize
     const viewWidth = typeof viewport?.clientWidth === 'number' ? viewport.clientWidth : undefined

@@ -16,23 +16,24 @@ State the load-bearing technical fact first, because it dictates the shape of th
 
 So this plugin **does not embed a webview in the GUI**. Instead:
 
-- The Host process **launches a real Chrome window on your own machine**, with `--remote-debugging-port`, and drives it over the Chrome DevTools Protocol (CDP).
-- The right-sidebar tab is therefore a **remote control surface**: a live screenshot of that Chrome window, a URL bar, back/forward/reload, a tab strip, and a page-text view.
-- Where you actually interact is **the Chrome window that opens on your desktop**.
+- The Host process **launches a real Chrome on your own machine**, with `--remote-debugging-port`, and drives it over the Chrome DevTools Protocol (CDP).
+- The right-sidebar tab is therefore a **remote control surface**: a live view of the browser's current page, a URL bar, back/forward/reload, a tab strip, and a page-text view.
+- That live view is an **image stream, not an embedded browser.** The panel polls the Host for a fresh screenshot on an interval; you steer the page with the URL bar and the navigation buttons, and the model steers it with the tools. The panel is not an interactive page — it is a picture of one, refreshed on a timer.
 
 Several consequences, stated plainly:
 
-- **The window is visible.** It opens on your desktop. It is not an invisible background browser, and it is not a separate application you must install — you need Chrome or Edge already present.
+- **No window appears by default.** `headless` is on, so the page lives in the sidebar and nothing pops up in front of the conversation. This is still a real local browser — it is not a separate application you must install, you need Chrome or Edge already present — you just do not see it unless you ask.
+- **You can raise the real window on demand.** `POST /api/sidebrowser/window` with `{"show": true}` brings a Chrome window onto your desktop; `{"show": false}` puts it away again. Chrome cannot add or remove its window at runtime, so the toggle **relaunches the browser against the same profile directory** — your login survives it, and up to three pages you had open are re-opened by URL afterwards. The `headless` setting does the same thing, but needs a DSH restart to apply. The panel draws no button for either today.
 - **It launches lazily.** Only the first time you actually use it (opening the tab, calling a tool, hitting a route) pulls the browser up; installing the plugin never pops a window on every Host start.
-- **A dedicated profile directory.** The plugin gives Chrome its own `--user-data-dir`, so you **log into DeepSeek by hand once** in that window and the session persists. That login is the foundation the whole feature rests on.
-- **This is why the model can read the DeepSeek web page at all.** The model needs the page's text, which a cross-origin frame could never give it. A Host-driven real Chrome window can.
+- **A dedicated profile directory.** The plugin gives Chrome its own `--user-data-dir`, so you **log into DeepSeek by hand once**, in a window you raised for the purpose, and the session persists. That login is the foundation the whole feature rests on.
+- **This is why the model can read the DeepSeek web page at all.** The model needs the page's text, which a cross-origin frame could never give it. A Host-driven real Chrome can.
 
 ### How it differs from the built-in `browser` tab
 
 | | Shipped `@deepseek-ai/dsh-client-ui-sidebar-browser` | This plugin, `dsh-sidebrowser` |
 | --- | --- | --- |
 | Tab kind | `browser` | `sidebrowser-cdp` |
-| Rendering | An in-app **iframe** (Web) / Electron `<webview>` (Desktop) | A **real Chrome window on the host**, driven over CDP; the sidebar shows its live view |
+| Rendering | An in-app **iframe** (Web) / Electron `<webview>` (Desktop) | A **real Chrome on the host**, driven over CDP; the sidebar shows its live view |
 | Can load DeepSeek / Bing / Google | **No** — those sites refuse to be framed cross-origin | **Yes** — it does not use a frame at all |
 | Model can read and operate the page | No | Yes: `browser_read`, `browser_act`, … |
 | Selection AI-explain / Translate | None | Yes |
@@ -45,9 +46,9 @@ If all you need is ordinary web browsing, the built-in tab may already be enough
 
 ## Features
 
-1. **A right-sidebar browser.** A tab beside your conversation (tab kind `sidebrowser-cdp`) opens the DeepSeek web app, Bing, 百度 translation, 有道 translation, or any http(s) URL. The panel provides: a live view, a URL bar (accepts a URL or a search term), back / forward / reload, a tab strip (new / close / switch), shortcut buttons, and a **page text** view. The tab chip title follows the host window's current page title.
+1. **A right-sidebar browser.** A tab beside your conversation (tab kind `sidebrowser-cdp`) opens the DeepSeek web app, Bing, 百度 translation, 有道 translation, or any http(s) URL. The panel provides: a live view, a URL bar (accepts a URL or a search term), back / forward / reload, a tab strip (new / close / switch), shortcut buttons, and a **page text** view. The live view is a polled screenshot fitted to the panel, not an interactive embed, and the panel holds a minimum height so a narrow sidebar shows a small page rather than nothing at all. The tab chip title follows the current page title.
 2. **Agent tools.** The model in a session gets five `browser_*` tools to read the page, click, type, press keys, scroll, navigate, manage tabs and take screenshots. The tools and the sidebar **share one driver**: a page you opened by hand is the very page the model reads, and a page the model opened appears in your sidebar. `agentTools` in the settings turns this surface off on its own while leaving the sidebar intact.
-3. **A selected-text mini-popup.** Select any word or sentence in a conversation and a small box appears beside it: **AI explain** (through the DeepSeek web app, spending no API quota and using your web conversation history), **Translate** (a translation site by default — 有道 / Bing / 百度 — falling back to the DeepSeek web page when the site gives nothing back), and **Copy**. `selectionPopup` in the settings turns it off.
+3. **A selected-text mini-popup.** Select any word or sentence in a conversation and a small box appears beside it: **AI explain** (through the DeepSeek web app, spending no API quota and using your web conversation history), **Translate** (a translation site, chosen by the shape of your selection — see below — and only falling back to the DeepSeek web page when the site renders nothing readable at all), and **Copy**. `selectionPopup` in the settings turns it off.
 
 ---
 
@@ -132,9 +133,9 @@ The package is dual-faced: the node half (exports `.`) runs in the Host process 
 
 ### Opening the sidebar browser
 
-Pick **Side browser** from the right sidebar's guide page, or use it in a cell that already exists. The Host launches Chrome the first time you do.
+Pick **Side browser** from the right sidebar's guide page, or use it in a cell that already exists. The Host launches Chrome the first time you do, headless: nothing appears on your desktop, and the page shows up in the panel.
 
-**Log into DeepSeek by hand in that Chrome window the first time.** The profile directory remembers the session afterwards, so you normally do not log in again.
+**To log into DeepSeek by hand, raise the real window first.** Set `headless: false` in the plugin's row (see [Configuration](#configuration)) and restart DSH, or post `{"show": true}` to `POST /api/sidebrowser/window` to toggle it live without a restart. Sign in there; the profile directory keeps the session, so you normally do not log in again. Put the window away afterwards and the page stays in the sidebar either way — the toggle relaunches the browser against the same profile rather than throwing the session away.
 
 The URL bar accepts a full URL and also these shortcut names: `deepseek`, `bing`, `baidu`, `youdao`, `google`, `googleTranslate`.
 
@@ -162,16 +163,20 @@ A few deliberate choices:
 Select text in a conversation and the popup beside it offers:
 
 - **AI explain** — asks through the DeepSeek **web page**, not an API. The plugin confirms the host browser is attached, navigates to `chat.deepseek.com`, waits for the page to mount, types the prompt into the first composer selector that matches, presses Enter, then polls the page text until the answer stops growing and cuts out the last assistant turn. A single word and a longer passage are prompted differently, and the selection is wrapped in `<selection>` so selected text is not read as part of the instruction.
-- **Translate** — a translation site by default (有道 / Bing / 百度), with the target language and engine chosen in settings. When the site yields nothing readable, it falls back to "Translate with the DeepSeek web page".
+- **Translate** — a translation site, routed by the shape of the selection. With the default `translationEngine: auto`, a single **word** goes to **有道词典** (`dict.youdao.com`, which answers a word with entries, phonetics and examples) and a **sentence** goes to **Bing 翻译**; 有道's sentence translator does not carry a whole sentence usefully through its URL form. Pinning `youdao`, `bing` or `baidu` in the settings uses that one site for everything.
+
+  If the site renders, that is the end of the path: the result is on screen in the sidebar and the popup says which site it is on. This is deliberate — the page used to be judged by a length heuristic, so a site that had rendered but did not parse to a long enough string was treated as a failure and the fallback **navigated away from the page you were reading** and replaced it with a DeepSeek login screen. Only a site that produces no readable text at all now falls back to the DeepSeek web page.
 - **Copy**.
 
-The popup is defensive by construction: no browser attached, signed out, composer missing, no answer within 90 seconds and host-route failure are each reported as one honest line you can act on, never as an empty answer box. **"I could not read an answer" is never presented as though it were the model's reply** — the difference matters, because the first is you fixing a login and the second is misinformation.
+The popup is defensive by construction: no browser attached, signed out, composer missing, no answer within 90 seconds and host-route failure are each reported as one honest line you can act on, never as an empty answer box. A logged-out chat is caught in **about six seconds**, not at the deadline: such a page still renders a composer, so the prompt can be typed and Enter swallowed without complaint, and the bridge watches for the prompt ever becoming a turn — when it does not, that is reported as login-required rather than leaving you watching a dead button. **"I could not read an answer" is never presented as though it were the model's reply** — the difference matters, because the first is you fixing a login and the second is misinformation.
 
 ---
 
 ## Configuration
 
 Settings live in **this plugin's own row in the profile** (entry id `ui-sidebrowser`) — Host-side config, not browser localStorage: settings follow the profile to another machine, and one value — the target language, the translation engine — is therefore read by both the DeepSeek-web bridge and the translation-site path.
+
+**These values really reach the panel now.** The Host serves its resolved settings at `GET /api/sidebrowser/config` and the client reads them once at startup. The client used to take them from a `configForms` service that no shipped DSH package provides, so every setting silently fell back to the client's own compiled-in defaults — a translation site you had chosen and an interval you had set both did nothing. The route below is the channel that actually exists: the Host owns the schema and the volatile fields.
 
 The plugin also registers a **settings card** into a `settings.section` seat. No shipped DSH package (as of `dsh-client-ui-*` 0.2.0-rc.2) declares that seat, so today the card does not render — configure the row through the profile's `cordis.patch.yml` (see below). The registration is a safe contribution: the moment a Host declares the seat, the card appears without any code change.
 
@@ -185,7 +190,7 @@ The Host-side `Config` in `src/index.ts` is the single source of truth for these
 | `executablePath` | string | `''` | Custom browser executable. Empty probes the standard Chrome / Chromium / Edge locations. |
 | `port` | number | `0` | Fixed CDP debugging port. `0` means the OS assigns a free port (the default, avoiding collisions with a second dsh profile or an existing debug browser). |
 | `userDataDir` | string | `''` | Chrome profile directory. Empty uses a stable per-user path under the temp directory. |
-| `headless` | boolean | `false` | Start without a visible window. Off by default: you sign in there. |
+| `headless` | boolean | `true` | Run without a window. On by default: the page lives in the sidebar and nothing pops up in front of the conversation. Set it to `false` to get the real window back (signing in by hand, for instance); that needs a DSH restart, and `POST /api/sidebrowser/window` is the same switch without one. |
 | `captureIntervalMs` | number | `1000` | Capture interval in **milliseconds**, 250–10000. |
 | `captureScale` | number | `0.5` | Screenshot downsample factor, 0.2–1. |
 | `selectionPopup` | boolean | `true` | Whether the selection mini-popup appears. Real: turn it off and no box appears beside your selection. |
@@ -193,11 +198,11 @@ The Host-side `Config` in `src/index.ts` is the single source of truth for these
 | `defaultUrl` | string | `https://chat.deepseek.com/` | The address a fresh tab opens. Must be http(s). |
 | `shortcuts` | string | `''` | Quick-launch shortcuts, one `name url` per line. |
 | `targetLanguage` | string | `zh-Hans` | Target language for the translation action, as a BCP 47 tag. |
-| `translationEngine` | string | `youdao` | Which translation site is preferred: `youdao` / `bing` / `baidu`. |
+| `translationEngine` | string | `auto` | Which translation site **Translate** prefers. `auto` is not one site: a single word goes to 有道词典 and a sentence to Bing 翻译. `youdao` / `bing` / `baidu` pin one site for every selection. |
 
 **The interval's unit trap.** The Host stores `captureIntervalMs` in **milliseconds**; the settings card displays and edits **seconds**. The card converts at its own two boundaries so no other code has to know — but if you edit `settings.yaml` by hand, you are writing milliseconds.
 
-**When changes take effect:** every field is volatile, so an edit commits in place instead of remounting the plugin, which would kill the Chrome window you are using. But the four launch-affecting fields — `executablePath`, `port`, `userDataDir`, `headless` — are read when the driver is constructed, so they need a **DSH restart** to matter. That is deliberate: changing them under a live Chrome would orphan your window.
+**When changes take effect:** every field is volatile, so an edit commits in place instead of remounting the plugin, which would kill the Chrome you are using. But the four launch-affecting fields — `executablePath`, `port`, `userDataDir`, `headless` — are read when the driver is constructed, so they need a **DSH restart** to matter. That is deliberate: changing them under a live Chrome would orphan your window. `headless` has the `POST /api/sidebrowser/window` escape hatch — it relaunches the browser in the other mode against the same profile directory, which is safe because the session lives in the profile rather than in the window.
 
 ### Host control routes
 
@@ -205,11 +210,13 @@ The plugin registers routes under `/api/sidebrowser` for the client's same-origi
 
 | Method | Path | What it does |
 | --- | --- | --- |
+| GET | `/config` | The Host's resolved plugin settings, which the client half reads at startup |
 | GET | `/state` | Browser snapshot (attached / loading / title / url / current tab) plus the shortcut names |
+| POST | `/window` | Show (`{"show": true}`) or hide (`{"show": false}`) the real Chrome window; relaunches against the same profile directory |
 | POST | `/navigate` `/back` `/forward` `/reload` | Navigation and history |
 | GET | `/tabs`; POST `/tabs/open` `/tabs/close` `/tabs/select` | Tabs |
 | POST | `/screenshot` | One capture (`fullPage`, `scale`) |
-| GET | `/frame` | The change-detected live frame: an unchanged page answers with metadata and no payload |
+| GET | `/frame` | The change-detected live frame: an unchanged page answers with metadata and no payload. It also takes an optional `?have=<frameId>` — the newest frame id the client already holds — so a panel that mounts after the Host's first capture is handed the frame it is missing instead of an "unchanged" about a frame it has never seen. The changed branch carries `url` / `title` / `frameId` / `capturedAt` as well as the image |
 | POST | `/text` | Page text, optionally with `includeInventory` |
 | POST | `/click` `/type` `/key` `/scroll` | Input actions |
 | POST | `/eval-safe` | A small named set of operations (click / type / key / scroll / read), **not** arbitrary evaluation |
@@ -224,7 +231,7 @@ Please read this section properly. The capabilities here are strong, and so is t
 
 - **Read anything on the page.** `browser_read` returns the current page's rendered text. Whatever you let it open, it can read — including pages you are logged into.
 - **Click and type on your pages.** `browser_act` can press buttons, enter text into fields and hit Enter to submit forms. It can take any action on a web page on your behalf.
-- **Act in a real window.** It drives the visible Chrome window on your desktop, so you can watch everything it does.
+- **Act in a real browser.** It drives a real Chrome on your machine, in a real profile, against your real logins. The window is hidden by default; raise it and you can watch everything it does.
 
 **What it does not do**
 
@@ -234,10 +241,10 @@ Please read this section properly. The capabilities here are strong, and so is t
 
 **Boundaries worth knowing**
 
-- **The login persists.** The DeepSeek session in the dedicated profile directory survives until you delete that directory. It defaults to a per-user path under the temp directory (`<tmp>/dsh-sidebrowser-<user>`) and can be pointed elsewhere with `userDataDir`. Delete the directory to drop the login.
+- **The login persists.** The DeepSeek session in the dedicated profile directory survives until you delete that directory — including across the window toggle, which relaunches the browser against that same directory. It defaults to a per-user path under the temp directory (`<tmp>/dsh-sidebrowser-<user>`) and can be pointed elsewhere with `userDataDir`. Delete the directory to drop the login.
 - **Uninstalling the plugin closes the Chrome it started.** Deliberately: leaving a debug-enabled browser running in the background is not a good outcome.
 - **The control routes are local-only.** Loopback socket, Host/Origin checks and the browser marker together keep remote and cross-site callers out. It is still an endpoint that can operate a logged-in browser, so do not expose it to a LAN or the public internet.
-- **Screenshots are plaintext.** The live view in the sidebar is exactly what the host window is showing. If the page holds sensitive information, the screenshot holds it too.
+- **Screenshots are plaintext.** The live view in the sidebar is exactly what the host browser is showing. If the page holds sensitive information, the screenshot holds it too.
 
 **Suggestions**
 

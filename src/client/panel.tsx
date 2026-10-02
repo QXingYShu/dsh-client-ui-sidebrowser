@@ -5,16 +5,15 @@
  *
  * The user asked for a browser inside the DSH sidebar. A literal embedded
  * webview is impossible here — DeepSeek, Bing, Baidu and Youdao all refuse to
- * be framed cross-origin — so this tab drives a **real Chrome window on the
- * host** over CDP and shows it here as a **live view** plus navigation
- * controls.
+ * be framed cross-origin — so this tab drives a **real Chrome on the host**
+ * over CDP and shows it here as a **live view** plus navigation controls.
  *
- * The panel is deliberately honest about itself. There is no "show window"
- * button because the Host exposes no such route: the window is an ordinary
- * visible window on the user's own desktop, and the copy says so rather than
- * offering a control that does not exist. What the panel *can* offer — a URL
- * bar, back/forward/reload, a tab strip, quick-launch shortcuts, and the
- * page's text — it offers fully.
+ * That browser now runs **headless by default**, so nothing pops up in front of
+ * the conversation: the page is in this panel and nowhere else. The Host does
+ * expose `POST /api/sidebrowser/window`, which brings the real window up for as
+ * long as the user wants it — which is how a DeepSeek sign-in is completed by
+ * hand — and puts it away again; the sign-in survives because it lives in the
+ * profile directory, not in the window.
  *
  * ## Why the page text view exists
  *

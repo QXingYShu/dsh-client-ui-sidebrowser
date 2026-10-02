@@ -213,7 +213,7 @@ export function resolvePromptRegistry(ctx: Context): PromptSectionRegistry | und
  * has no reason to suspect it can see it at all.
  */
 export const SIDEBROWSER_GUIDANCE = [
-  '本机已安装 dsh-sidebrowser 插件（DSH Web GUI 的右侧栏浏览器）：右侧栏可打开 DeepSeek 网页版、Bing、百度/有道翻译或任意网址，Host 会启动一个真实的 Chrome 窗口（因这些站点禁止被 iframe 嵌套，右侧栏显示的是该窗口的实时截图，交互在主机窗口上进行）。',
+  '本机已安装 dsh-sidebrowser 插件（DSH Web GUI 的右侧栏浏览器）：右侧栏可打开 DeepSeek 网页版、Bing、有道词典/必应翻译或任意网址。Host 驱动一个真实的 Chrome（这些站点禁止被 iframe 嵌套，所以无法内嵌），默认以无窗口方式运行，右侧栏直接显示它的实时画面；需要时可调出真实窗口（例如让用户手动登录 DeepSeek），登录态存在独立 profile 目录里，关掉窗口不会掉线。',
   '另注册 browser_* 代理工具：browser_open 打开网址、browser_read 读取当前页面文字（可带结构清单）、browser_act 执行导航/点击/输入/按键/滚动、browser_tabs 管理标签页、browser_screenshot 截图并返回主机文件路径。',
   '因此你可以看到并操作用户正在浏览的页面；用户选中对话中的单词或句子时，右侧栏还会出现「AI解释」（走 DeepSeek 网页版会话）与「翻译」入口。',
   '用户提到「打开网页、浏览器、右侧栏、查一下、搜一下、翻译、AI解释」时即可使用本插件。',
