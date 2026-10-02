@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from 'react'
 import { SelectionPopup } from './selection-popup.tsx'
-import { detectSelection, type DetectedSelection } from './selection.ts'
+import { detectSelection, OWN_SURFACE_ATTRIBUTE, type DetectedSelection } from './selection.ts'
 import type { SideBrowserApi } from './api.ts'
 import type { TranslationEngine } from './deepseek-web.ts'
 
@@ -72,8 +72,17 @@ export function SelectionHost(props: SelectionHostProps): React.ReactElement | n
       }
     }
 
-    const onPointerDown = (): void => {
-      // Any fresh press means the user is doing something else.
+    const onPointerDown = (event: Event): void => {
+      // A press INSIDE the popup is the user reaching for one of its buttons, not
+      // the start of a new selection. Clearing unconditionally would unmount the
+      // popup: `pointerdown`, `mouseup` and `click` are three separate tasks, and
+      // React flushes the unmount in a microtask at the end of the first one — so
+      // the button node is detached before the click is dispatched, and React 18's
+      // root-delegated `onClick` never fires. Every action in the popup would be
+      // dead on arrival.
+      const target = event.target
+      if (target instanceof Element && target.closest(`[${OWN_SURFACE_ATTRIBUTE}]`) !== null) return
+      // Any other fresh press means the user is doing something else.
       setSelection(undefined)
     }
 

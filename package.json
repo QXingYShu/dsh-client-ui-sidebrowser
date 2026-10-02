@@ -6,15 +6,15 @@
   "icon": "icon.svg",
   "type": "module",
   "main": "lib/index.js",
+  "engines": {
+    "dsh": ">=0.2.0-rc.1"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "dsh": {
-    "engines": {
-      "dsh": ">=0.2.0-rc.1"
-    },
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
@@ -63,6 +63,7 @@
   "files": [
     "lib/**/*.js",
     "lib/**/*.js.map",
+    "lib/**/*.css",
     "src",
     "scripts",
     "cordis.patch.yml",
@@ -83,6 +84,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify:bundle": "node scripts/verify-client-bundle.mjs",
+    "prepare": "tsdown",
     "prepack": "pnpm run build"
   },
   "keywords": [

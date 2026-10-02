@@ -1,3 +1,5 @@
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { defineConfig, type Plugin } from 'tsdown'
 
 /** The package name the Web GUI's module loader keys this bundle under. */
@@ -51,6 +53,78 @@ function clientModuleLoaderWrapper(): Plugin {
         `  },\n` +
         `});\n`
       )
+    },
+  }
+}
+
+/** Where {@link clientModuleLoaderWrapper} opens the factory body it emits. */
+const FACTORY_MARKER = 'factory: (require) => {'
+
+/** Output directory shared by both builds; the client chunk and CSS land here. */
+const OUT_DIR = 'lib'
+
+/**
+ * Inline the emitted stylesheet into the client bundle.
+ *
+ * `@tsdown/css` collects `*.module.css` into `lib/style.css` and rewrites the
+ * class names in the JS, but it does not put the stylesheet in front of the
+ * browser: the file is written next to the bundle and nothing ever loads it. The
+ * GUI hands each client bundle to `window.__ModuleLoader__` and only ever
+ * evaluates the factory body, so a plugin has to install its own styles as a
+ * side effect of that body — which is exactly what the shipped packages do
+ * (see `dsh-client-ui-sidebar-browser/lib/client.js`, which creates a
+ * `<style data-plugin-css=...>` tag holding the CSS text).
+ *
+ * `closeBundle` rather than `renderChunk`, because the stylesheet does not exist
+ * on disk until the CSS plugin has emitted it, and that plugin's hooks run after
+ * every user plugin's. So the bundle is rewritten as a final pass once all writes
+ * are done. The rewrite is idempotent: a second build that finds its own marker
+ * already present leaves the file alone.
+ */
+function clientCssInjection(cssFileName = 'style.css'): Plugin {
+  return {
+    name: 'dsh-client-css-injection',
+    enforce: 'post',
+    async closeBundle() {
+      let css: string
+      try {
+        css = await readFile(join(OUT_DIR, cssFileName), 'utf8')
+      } catch {
+        return // no stylesheet emitted; nothing to inline
+      }
+      if (css.trim() === '') return
+
+      const chunkPath = join(OUT_DIR, 'client.js')
+      let code: string
+      try {
+        code = await readFile(chunkPath, 'utf8')
+      } catch {
+        return
+      }
+      // Only the wrapped client chunk carries the loader call, and only once.
+      if (!code.includes('__ModuleLoader__.load') || code.includes('data-plugin-css')) return
+
+      const at = code.indexOf(FACTORY_MARKER)
+      if (at === -1) return
+      const insertAt = at + FACTORY_MARKER.length
+
+      const tagId = `${CLIENT_ID}/${cssFileName}`
+      const prologue = [
+        '',
+        '// --- dsh-sidebrowser: inline stylesheet (see tsdown.config.ts) ---',
+        `    (() => {`,
+        `      const tagId = ${JSON.stringify(tagId)};`,
+        `      if (typeof document === "undefined") return;`,
+        `      if (document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") !== null) return;`,
+        `      const tag = document.createElement("style");`,
+        `      tag.dataset.plugin = ${JSON.stringify(CLIENT_ID)};`,
+        `      tag.dataset.pluginCss = tagId;`,
+        `      tag.textContent = ${JSON.stringify(css)};`,
+        `      document.head.appendChild(tag);`,
+        `    })();`,
+      ].join('\n')
+
+      await writeFile(chunkPath, code.slice(0, insertAt) + prologue + code.slice(insertAt), 'utf8')
     },
   }
 }
@@ -111,6 +185,6 @@ export default defineConfig([
         '@deepseek-ai/cordis',
       ],
     },
-    plugins: [clientModuleLoaderWrapper()],
+    plugins: [clientModuleLoaderWrapper(), clientCssInjection()],
   },
 ])

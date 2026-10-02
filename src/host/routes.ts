@@ -368,7 +368,21 @@ export function makeSidebrowserRoutes(driver: BrowserDriver, stream: ScreenshotS
     const fullPage = readBoolean(body, 'fullPage') === true
     const requested = readNumber(body, 'scale')
     const scale = requested === undefined ? 1 : Math.min(Math.max(requested, 0.2), 1)
-    return { ok: true, data: await driver.captureScreenshot(fullPage, tabId, scale) }
+    // Answer with a frame *record*, the same shape `/frame` sends and the same
+    // one the client's parser expects. Returning the bare base64 string here
+    // instead meant every explicit capture failed client-side with "empty frame".
+    const data = await driver.captureScreenshot(fullPage, tabId, scale)
+    const page = await driver.snapshot(tabId).catch(() => undefined)
+    return {
+      ok: true,
+      frame: {
+        id: Date.now(),
+        data,
+        title: page?.title ?? '',
+        url: page?.url ?? '',
+        capturedAt: new Date().toISOString(),
+      },
+    }
   })
 
   /**
@@ -377,7 +391,26 @@ export function makeSidebrowserRoutes(driver: BrowserDriver, stream: ScreenshotS
    * what makes a 1 Hz poll affordable.
    */
   const frame = get('frame', async () => {
-    const poll = await stream.poll()
+    let poll: Awaited<ReturnType<ScreenshotStream['poll']>>
+    try {
+      poll = await stream.poll()
+    } catch (error) {
+      // Cold start: no tab exists yet, so there is nothing to capture. That is
+      // an empty view, not a failure — answering 4xx/5xx here made the
+      // sidebar's very first paint a server error.
+      if (error instanceof BrowserError && error.code === 'no-tab') {
+        const idle = stream.latest()
+        return {
+          ok: true,
+          changed: false,
+          frameId: idle?.id ?? 0,
+          capturedAt: idle?.capturedAt ?? new Date().toISOString(),
+          title: idle?.title ?? '',
+          url: idle?.url ?? '',
+        }
+      }
+      throw error
+    }
     if (!poll.changed) {
       return { ok: true, changed: false, frameId: poll.frameId, capturedAt: poll.capturedAt, title: poll.title, url: poll.url }
     }

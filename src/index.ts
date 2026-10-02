@@ -147,9 +147,16 @@ interface AgentToolRegistry {
   register(definition: ToolDefinition): () => void
 }
 
-/** The prompt-assembler face the announcement registers into. */
+/**
+ * The prompt-assembler face the announcement registers into.
+ *
+ * The real contract is `section({ name, order, text })`: `order` must be a finite
+ * number or the assembler throws a TypeError, and the rendered body is read from
+ * `text`. There is no `content` field, so a section carrying one would register
+ * without error and then render as nothing.
+ */
 interface PromptSectionRegistry {
-  section(section: { name: string, content: () => string }): () => void
+  section(section: { name: string, order: number, text: string }): () => void
 }
 
 /**
@@ -301,16 +308,13 @@ function applyImpl(ctx: Context, config?: Config): void {
       // resolve found nothing and the tools would never attach. A scoped inject
       // re-runs the callback when `tools` actually becomes available, which
       // closes that ordering gap without making the row depend on the registry.
-      const scoped = ctx.inject?.(['tools'], () => {
+      //
+      // `ctx.inject` returns a Fiber, not a disposer: it disposes itself with its
+      // parent, so there is nothing to push onto `disposers` here.
+      ctx.inject?.(['tools'], () => {
         setToolsEnabled(agentToolsEnabled())
         return () => setToolsEnabled(false)
       })
-      if (typeof scoped === 'function') disposers.push(scoped as () => void)
-
-      const prompt = resolvePromptRegistry(ctx)
-      if (prompt !== undefined) {
-        disposers.push(prompt.section({ name: 'sidebrowser', content: () => SIDEBROWSER_GUIDANCE }))
-      }
     } catch (error) {
       // A failed mount must not leave the tools bound to a driver whose effect
       // cleanup will never run.
@@ -320,6 +324,24 @@ function applyImpl(ctx: Context, config?: Config): void {
       void driver.dispose()
       throw error
     }
+
+    // The system-prompt announcement is registered in its OWN effect, outside the
+    // try above, on purpose. An optional surface must never be able to take down
+    // the required one: `section()` throws on a malformed record, and a throw
+    // inside that try would un-register all the routes and the agent tools this
+    // plugin exists to provide, turning one bad optional call into a total
+    // outage. Here a failure costs the announcement and nothing else.
+    ctx.effect(() => {
+      const prompt = resolvePromptRegistry(ctx)
+      if (prompt === undefined) return () => {}
+      try {
+        return prompt.section({ name: 'sidebrowser', order: 100, text: SIDEBROWSER_GUIDANCE })
+      } catch (error) {
+        console.error('[dsh-sidebrowser] could not announce the browser to the agent:', error)
+        return () => {}
+      }
+    }, 'sidebrowser: system prompt announcement')
+
     return () => {
       setToolsEnabled(false)
       for (const dispose of disposers.splice(0)) dispose()

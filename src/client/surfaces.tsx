@@ -264,27 +264,34 @@ function engineFor(id: string | undefined): (typeof TRANSLATION_ENGINES)[number]
  * @returns the panel.
  */
 function SideBrowserTabBody(props: Record<string, unknown>): React.ReactElement | null {
-  const useTabInfo = props.useSidebarRightTabInfo as UseSidebarRightTabInfo | undefined
-  const bindCommands = props.bindCommands as ((commands: { refresh?: () => void }) => () => void) | undefined
+  // The slot framework exposes an injected hook as `use<Name>`, and the seat
+  // declares its factory under the key `tabInfo` — so the prop the shell
+  // actually passes is `useTabInfo`, not `useSidebarRightTabInfo` (which is only
+  // the TypeScript type's name). Reading the type name here renders null
+  // forever, which is a tab that opens to a blank pane with no error anywhere.
+  const useTabInfo = props.useTabInfo as UseSidebarRightTabInfo | undefined
   if (useTabInfo === undefined) return null
-  return <SideBrowserTabBodyInner useTabInfo={useTabInfo} bindCommands={bindCommands} />
+  return <SideBrowserTabBodyInner useTabInfo={useTabInfo} />
 }
 
 /**
  * The body as a component, so React can subscribe through the injected hook.
- * @param props - the tab-information reader and the command binder.
+ * @param props - the tab-information reader.
  * @returns the panel.
  */
 function SideBrowserTabBodyInner(props: {
   useTabInfo: UseSidebarRightTabInfo
-  bindCommands?: (commands: { refresh?: () => void }) => () => void
 }): React.ReactElement {
   const info = props.useTabInfo()
   const navigation = info.tab.navigation
   const settings = useLiveSettings()
-  const bind = useCallback<NonNullable<typeof props.bindCommands>>(
-    commands => props.bindCommands?.(commands) ?? (() => {}),
-    [props.bindCommands],
+  // Command binding is a method on the tab's own action bag, not a second prop:
+  // `bindCommands` returns a disposer that must not drop a newer registration,
+  // so it is rebound whenever the shell hands this body a different action bag.
+  const actions = info.tab.actions
+  const bind = useCallback<(commands: { refresh?: () => void }) => () => void>(
+    commands => actions.bindCommands(commands),
+    [actions],
   )
 
   // A caller may open this tab with a URL (`openTab('sidebrowser-cdp', {
@@ -533,9 +540,14 @@ export function apply(ctx: ClientContext): void {
     }, SideBrowserFooterButton)), 'sidebrowser: footer row')
 
     // --- The settings card ------------------------------------------------
-    // `settings.section` is the settings-page list seat the shell declares
-    // inside its own `sidebar` occupant; contributing here makes the card
-    // reachable from the plugin's own settings page without replacing anything.
+    // A contribution, not an assumption: `slots.inject` declares "when a
+    // `settings.section` seat exists, fill it", so on a Host whose settings page
+    // declares no such seat the callback simply never fires and this costs
+    // nothing. It does NOT exist in the shipped client packages as of
+    // dsh-client-ui-* 0.2.0-rc.2 — so today the card is unreachable from the
+    // settings page, and the plugin is configured through its cordis patch row
+    // instead. The registration is kept so the card lights up on the first Host
+    // that does declare the seat, rather than needing the whole surface redone.
     ctx.effect(() => slots.inject('settings.section', () => slots.register({
       name: 'settings.section',
       id: 'sidebrowser',

@@ -1,0 +1,10 @@
+# Lifecycle scripts of transitive devDependencies are blocked by default.
+# None of these are needed to build or test this package (the suite runs
+# without their native/output build steps), so they stay off explicitly rather
+# than leaving pnpm's "set this to true or false" placeholder behind.
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': false
+  '@google/genai': false
+  koffi: false
+  node-pty: false
+  protobufjs: false

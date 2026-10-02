@@ -21,7 +21,7 @@
  * @module dsh-sidebrowser/browser/screenshot-stream
  */
 
-import type { BrowserDriver } from './driver.ts'
+import { BrowserError, type BrowserDriver } from './driver.ts'
 
 /** Options for {@link ScreenshotStream}. */
 export interface ScreenshotStreamOptions {
@@ -209,12 +209,16 @@ export class ScreenshotStream {
    * inside Chrome's capture (see `BrowserDriver.captureScreenshot`), so the
    * Host never materialises a full-resolution bitmap.
    * @returns the base64 PNG data.
-   * @throws {Error} when there is no page to capture.
+   * @throws {BrowserError} with code `no-tab` when there is no page to capture.
    */
   private async captureScaled(): Promise<string> {
     const tabs = await this.driver.listTabs()
     const tab = tabs.find(t => t.selected) ?? tabs[0]
-    if (tab === undefined) throw new Error('there is no page open to screenshot')
+    // A BrowserError, not a bare Error: the routes translate the former into a
+    // meaningful status and the latter into a generic 500. A sidebar poll on a
+    // cold start — before any tab exists — is the normal case, not an internal
+    // failure, and it must not read as a server error.
+    if (tab === undefined) throw new BrowserError('no-tab', 'there is no page open to screenshot')
     return await this.driver.captureScreenshot(this.fullPage, tab.id, this.scale)
   }
 

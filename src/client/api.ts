@@ -403,7 +403,7 @@ export class SideBrowserApi {
       ...(options.scale === undefined ? {} : { scale: options.scale }),
     }, { timeoutMs: 25_000 })
     if (!result.ok) return result
-    const frame = SideBrowserApi.frame(result.value.data)
+    const frame = SideBrowserApi.frame(result.value.frame)
     if (frame === undefined) return { ok: false, error: 'The host returned an empty frame' }
     return { ok: true, value: frame }
   }

@@ -48,6 +48,15 @@ export interface CdpEvent {
   method: CdpMethod
   /** Event payload, or an empty object when the event carries none. */
   params: Record<string, CdpValue>
+  /**
+   * Flat-mode session this event was addressed to, when it had one.
+   *
+   * In flat mode the session id is a TOP-LEVEL field of the message envelope, not
+   * a member of `params`. Any code that tries to read it out of `params` sees
+   * `undefined` against a real Chrome, which silently turns "this event belongs
+   * to the page I navigated" into "this event belongs to any page at all".
+   */
+  sessionId?: string
 }
 
 /** Handler invoked for each CDP event; errors are caught and reported, never rethrown into the socket. */
@@ -143,11 +152,13 @@ interface PendingCommand {
 }
 
 /** Decoder for the JSON payloads CDP frames. Shared so every parse path is identical. */
-function decodeMessage(data: unknown): { id?: number, method?: CdpMethod, params?: Record<string, CdpValue>, result?: CdpValue, error?: { code: number, message: string, data?: CdpValue } } {
+function decodeMessage(data: unknown): { id?: number, method?: CdpMethod, params?: Record<string, CdpValue>, result?: CdpValue, error?: { code: number, message: string, data?: CdpValue }, sessionId?: string } {
   const text = typeof data === 'string' ? data : Buffer.isBuffer(data) ? data.toString('utf8') : String(data)
   const parsed: unknown = JSON.parse(text)
   if (typeof parsed !== 'object' || parsed === null) throw new Error('CDP frame is not an object')
-  return parsed as { id?: number, method?: CdpMethod, params?: Record<string, CdpValue>, result?: CdpValue, error?: { code: number, message: string, data?: CdpValue } }
+  // `sessionId` is a top-level envelope field in flat mode, so it has to be part
+  // of the decoded shape or it cannot be carried onto the event.
+  return parsed as { id?: number, method?: CdpMethod, params?: Record<string, CdpValue>, result?: CdpValue, error?: { code: number, message: string, data?: CdpValue }, sessionId?: string }
 }
 
 /**
@@ -269,7 +280,7 @@ export class CdpClient {
       return
     }
     if (typeof frame.method !== 'string') return
-    const event: CdpEvent = { method: frame.method, params: frame.params ?? {} }
+    const event: CdpEvent = { method: frame.method, params: frame.params ?? {}, sessionId: frame.sessionId }
     for (const handler of this.handlers.get(event.method) ?? []) this.invokeHandler(handler, event)
     for (const handler of this.handlers.get('*') ?? []) this.invokeHandler(handler, event)
   }

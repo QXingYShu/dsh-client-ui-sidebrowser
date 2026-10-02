@@ -317,10 +317,21 @@ export class BrowserDriver {
     }
     const child = spawn(executable, args, { stdio: 'ignore', detached: false })
     this.process = child
+    // `spawn` reports failure asynchronously on the child, and an EventEmitter
+    // 'error' with no listener throws. Without this listener a bad
+    // `executablePath` — a directory, a .lnk, a quarantined or half-deleted
+    // binary — takes down the whole Host process instead of just this plugin.
+    // Windows treats `access(X_OK)` as `F_OK`, so the probe above proves
+    // existence, not executability, so this path is genuinely reachable.
+    let spawnError: Error | undefined
+    child.once('error', (error: Error) => {
+      spawnError = error
+      if (this.process === child) this.process = undefined
+    })
     child.once('exit', () => {
       if (this.process === child) this.process = undefined
     })
-    await this.waitForDebugPort(port)
+    await this.waitForDebugPort(port, () => spawnError)
     const client = await this.tryConnect(port)
     if (client === undefined) {
       throw new BrowserError('launch-failed', `Chrome started but its debugging port ${port} never accepted a CDP connection`)
@@ -362,11 +373,16 @@ export class BrowserDriver {
    * second or so on a warm profile, but a cold first-run can take longer; this
    * polls until the deadline rather than guessing a fixed sleep.
    * @param port - the port to wait on.
+   * @param spawnError - reads the pending spawn failure, if one has been reported.
    * @throws {BrowserError} when the deadline passes with no listener.
    */
-  private async waitForDebugPort(port: number): Promise<void> {
+  private async waitForDebugPort(port: number, spawnError?: () => Error | undefined): Promise<void> {
     const deadline = Date.now() + LAUNCH_TIMEOUT_MS
     while (Date.now() < deadline) {
+      const failure = spawnError?.()
+      if (failure !== undefined) {
+        throw new BrowserError('launch-failed', `Chrome could not be started: ${failure.message}`)
+      }
       if (this.process?.exitCode !== null && this.process?.exitCode !== undefined) {
         throw new BrowserError('launch-failed', 'Chrome exited before opening its debugging port')
       }
@@ -426,10 +442,12 @@ export class BrowserDriver {
     const client = await this.requireClient()
     const result = await client.sendObject('Target.getTargets')
     const infos = Array.isArray(result.targetInfos) ? result.targetInfos : []
+    const live = new Set<string>()
     for (const raw of infos) {
       if (typeof raw !== 'object' || raw === null) continue
       const info = raw as { targetId?: string, type?: string, url?: string, title?: string }
       if (info.type !== 'page' || typeof info.targetId !== 'string') continue
+      live.add(info.targetId)
       if (this.findByTargetId(info.targetId) !== undefined) continue
       const id = this.newTabId()
       this.tabs.set(id, {
@@ -440,6 +458,19 @@ export class BrowserDriver {
         title: typeof info.title === 'string' ? info.title : '',
         selected: false,
       })
+    }
+    // Drop the tabs the browser has actually destroyed. Without this the strip
+    // only ever grew: a closed tab was re-adopted from a stale `Target.getTargets`
+    // as a brand-new record with the same targetId, so the user could click a
+    // ghost tab and then watch a later command fail against a dead target.
+    for (const [id, tab] of [...this.tabs]) {
+      if (live.has(tab.targetId)) continue
+      this.tabs.delete(id)
+      this.globalObjectIds.delete(tab.sessionId)
+      // Clear the selection if it pointed at the removed tab; otherwise the id
+      // would dangle until some later resync noticed, and the selection block
+      // below cannot replace it (there is no next tab to pick).
+      if (this.selectedTabId === id) this.selectedTabId = undefined
     }
     if (this.selectedTabId === undefined || !this.tabs.has(this.selectedTabId)) {
       const first = this.tabs.keys().next()
@@ -692,8 +723,12 @@ export class BrowserDriver {
         resolve()
       }
       const off = client.on('Page.loadEventFired', (event) => {
-        // Flat-mode events carry their session in params; only settle for ours.
-        if (event.params.sessionId === undefined || event.params.sessionId === sessionId) done()
+        // Flat mode puts the session id at the top level of the envelope, not in
+        // params. Reading it out of `params` yields undefined against a real
+        // Chrome, so this used to settle on the FIRST tab's load event — sending
+        // navigate/open/reload on to a text extraction that reads a document
+        // still half-rendered.
+        if (event.sessionId === undefined || event.sessionId === sessionId) done()
       })
       const timer = setTimeout(done, 5000)
       timer.unref?.()
