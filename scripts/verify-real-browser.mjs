@@ -213,6 +213,39 @@ const translated = await driver.extractText({ maxChars: 4000 })
 check('the translation is on the page', translated.text.includes(TRANSLATION_TEXT), translated.text.slice(0, 60))
 check('the source text is on the page', translated.text.includes(SOURCE_TEXT), '')
 
+// --- 4. concurrent tool calls ----------------------------------------------
+
+// Every tool declares `isConcurrencySafe: () => true`, which is a promise that
+// the Host may run several at once. That promise is about the driver, so it is
+// checked rather than assumed: overlapping reads, clicks, scrolls and tab
+// listings through one CDP connection and one tab model.
+section('concurrent tool calls')
+// The previous section left a translation page selected; the batch needs a tab
+// with a composer and a button on it, so open the content page first and take
+// the tab baseline after that.
+await call('browser_open', { url: contentUrl })
+const tabsBefore = ((await call('browser_tabs', { action: 'list' })).tabs ?? [])
+  .filter(t => !String(t.url).startsWith('chrome://')).length
+// Reads, a click, a tab listing and a type all at once. The click is not batched
+// with a scroll on purpose: a scroll moves the page under a click's coordinates,
+// so pairing them would test the caller's ordering rather than the driver's
+// tolerance of concurrent calls.
+const concurrent = await Promise.all([
+  call('browser_read', { maxChars: 300 }),
+  call('browser_act', { action: 'click', selector: '#go' }),
+  call('browser_read', { maxChars: 300 }),
+  call('browser_tabs', { action: 'list' }),
+  call('browser_act', { action: 'type', text: 'hello', selector: '#q' }),
+])
+check('every overlapping call answered', concurrent.every(r => r.ok === true), concurrent.filter(r => r.ok === false).length + ' failed')
+const concurrentAfter = await call('browser_read', { maxChars: 300 })
+check('the click from the batch really happened', concurrentAfter.text.includes('AFTER q='), String(concurrentAfter.text).slice(0, 60))
+const tabsAfter = (await call('browser_tabs', { action: 'list' })).tabs ?? []
+check('no blank page entered the strip', tabsAfter.every(t => !String(t.url).startsWith('chrome://')), '')
+check('the tab model survived the batch', tabsAfter.length === tabsBefore, `${tabsBefore} -> ${tabsAfter.length}`)
+const parallel = await Promise.all(Array.from({ length: 8 }, () => call('browser_read', { maxChars: 200 })))
+check('eight parallel reads all succeed', parallel.every(r => r.ok === true), parallel.filter(r => !r.ok).length + ' failed')
+
 // --- done -------------------------------------------------------------------
 
 await driver.dispose()
