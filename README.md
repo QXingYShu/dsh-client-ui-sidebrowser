@@ -254,7 +254,40 @@ pnpm install
 pnpm build       # tsdown: ESM for the Host half, loader-wrapped CJS for the client half
 pnpm typecheck   # tsc --noEmit
 pnpm test        # vitest run
+pnpm verify:real # drives a REAL Chrome and a REAL page (see below)
 ```
+
+### Verifying against a real browser
+
+```bash
+pnpm verify:real
+```
+
+This is the check that matters, and it exists because of how this plugin went.
+Every defect it shipped with passed the unit suite and a clean build — the mount
+-time throw that unregistered all seventeen HTTP routes, a tab body reading a
+prop the shell never passes, the popup unmounting itself before the click could
+land, a selection race that made every command act on the wrong tab, and AI
+explain answering with the user's own prompt. All of them were invisible to
+mocks and obvious the moment a real browser was involved.
+
+`pnpm verify:real` imports the production driver, the production `browser_*`
+tools and the production DeepSeek-web bridge, launches a real Chrome, and drives
+real pages against 23 assertions:
+
+| Area | What it proves |
+|---|---|
+| `browser_open` / `browser_read` | a new tab is created, and the read returns the rendered text plus **real** selectors for the form and the links |
+| `browser_act` | typing and clicking actually change the page's DOM; scrolling actually moves the viewport; a `file:` url is refused rather than obeyed |
+| `browser_tabs` | list / select / close, and a closed tab leaves the strip; no `chrome://` blank page is ever tracked |
+| `browser_screenshot` | a PNG is written to disk, and it is not empty |
+| AI explain | the composer is found, the prompt is typed, Enter is sent, the streaming answer is awaited, and the extracted text is the model's reply — **without** the user's prompt and **without** the model label |
+| Translation | the site is opened with the text, the result is on the page, and the engine used is reported |
+
+Nothing in the plugin is mocked; only the page is a local stand-in, because the
+real sites need an account and must not be driven by a test. Set
+`SIDEBROWSER_CHROME` to point at a different browser and `SIDEBROWSER_HEADLESS=0`
+to watch it run.
 
 ### Layout
 

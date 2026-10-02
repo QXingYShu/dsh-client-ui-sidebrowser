@@ -250,7 +250,35 @@ pnpm install
 pnpm build       # tsdown：Host 侧输出 ESM，客户端侧输出被 loader 包起来的 CJS
 pnpm typecheck   # tsc --noEmit
 pnpm test        # vitest run
+pnpm verify:real # 驱动**真实 Chrome** 与**真实页面**（见下）
 ```
+
+### 用真实浏览器验证
+
+```bash
+pnpm verify:real
+```
+
+这是真正要紧的那道检查，而它的存在正是被这个插件的来历逼出来的：它出厂时带的每一个缺陷
+都通过了单元测试和干净构建——挂载时抛错把自己注册的 17 条路由全删掉、tab 体读了 shell
+从不会传的 prop、选区小框在 click 落地前先把自己卸载、一次选中态竞态让每条命令都打在错
+页上、AI解释把你自己的提问当成答案回显。这些在 mock 里全都看不见，一旦有真浏览器参与就
+立刻暴露。
+
+`pnpm verify:real` 直接 import 生产代码里的 driver、`browser_*` 工具和 DeepSeek 网页版桥接，
+启动真实 Chrome，对着真实页面跑 23 项断言：
+
+| 范围 | 它证明了什么 |
+|---|---|
+| `browser_open` / `browser_read` | 新标签页确实被创建；读回的是渲染文本，外加表单和链接的**真实选择器** |
+| `browser_act` | 打字与点击真的改变了页面 DOM；滚动真的移动了视口；`file:` 地址被拒绝而不是照做 |
+| `browser_tabs` | 列出 / 切换 / 关闭都生效，关掉的标签会离开标签条；`chrome://` 空白页从不被跟踪 |
+| `browser_screenshot` | PNG 真的落盘且非空 |
+| AI 解释 | 找到输入框、打字、回车、等待流式回答，取出的文本是**模型的回复**——既不包含你的提问，也不带模型标签 |
+| 翻译 | 站点带着待译文本被打开、译文留在页面上、并如实报告用的是哪个引擎 |
+
+插件自身代码没有任何 mock；只有页面是本地替身——真实站点需要账号，也不该被测试驱动。
+`SIDEBROWSER_CHROME` 可指定别的浏览器，`SIDEBROWSER_HEADLESS=0` 可以看着它跑。
 
 ### 目录结构
 

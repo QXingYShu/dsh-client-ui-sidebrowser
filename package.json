@@ -86,6 +86,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify:bundle": "node scripts/verify-client-bundle.mjs",
+    "verify:real": "node --experimental-transform-types scripts/verify-real-browser.mjs",
     "prepare": "tsdown",
     "prepack": "pnpm run build"
   },
