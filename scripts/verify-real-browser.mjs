@@ -277,6 +277,36 @@ check('the tab model survived the batch', tabsAfter.length === tabsBefore, `${ta
 const parallel = await Promise.all(Array.from({ length: 8 }, () => call('browser_read', { maxChars: 200 })))
 check('eight parallel reads all succeed', parallel.every(r => r.ok === true), parallel.filter(r => !r.ok).length + ' failed')
 
+// --- 7. the capture path must not disturb a visible window ------------------
+
+// The sidebar polls this every second against a window the user is looking at.
+// Capturing through the compositor makes that window flash once per capture -
+// reported as "flashes about once a second". The live view therefore captures
+// from the renderer and downsizes by resizing the surface, which must be
+// restored afterwards.
+section('live capture (the flashing-window regression)')
+function pngSize(base64) {
+  const buf = Buffer.from(base64, 'base64')
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20), bytes: buf.length }
+}
+const natural = pngSize(await driver.captureScreenshot(false, undefined, 1))
+const half = pngSize(await driver.captureScreenshot(false, undefined, 0.5))
+check('the live view downsizes on request', half.width < natural.width, `${natural.width} -> ${half.width}`)
+check('downsizing is roughly proportional', Math.abs(half.width / natural.width - 0.5) < 0.1, `${natural.width} -> ${half.width}`)
+
+const client = driver.client
+const tab = (await driver.listTabs())[0]
+const sizeExpression = 'window.innerWidth + "x" + window.innerHeight'
+const before = await client.sendObject('Runtime.evaluate', { expression: sizeExpression }, tab.sessionId)
+const after = await client.sendObject('Runtime.evaluate', { expression: sizeExpression }, tab.sessionId)
+check('a capture leaves the page size untouched', before.result.value === after.result.value, `${before.result.value} vs ${after.result.value}`)
+
+const tall = await serve('<!doctype html><html><body style="margin:0"><div style="height:3000px;background:#036"></div></body></html>')
+await driver.open(tall)
+const tallViewport = pngSize(await driver.captureScreenshot(false, undefined, 0.5))
+const tallFull = pngSize(await driver.captureScreenshot(true, undefined, 0.5))
+check('fullPage really is taller than the viewport', tallFull.height > tallViewport.height * 2, `${tallViewport.height} -> ${tallFull.height}`)
+
 // --- done -------------------------------------------------------------------
 
 await driver.dispose()

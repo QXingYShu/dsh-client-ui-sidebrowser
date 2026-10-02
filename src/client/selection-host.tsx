@@ -25,8 +25,8 @@ export interface SelectionHostProps {
   enabled: boolean
   /** Route client, or undefined while the Host routes are unavailable. */
   api: SideBrowserApi | undefined
-  /** Translation engine to try first. */
-  engine: TranslationEngine
+  /** Engine to force, or undefined to let the selection decide (word vs sentence). */
+  engine: TranslationEngine | undefined
   /** Target language code. */
   targetLanguage: string
   /** How long to wait for a DeepSeek answer. */

@@ -41,6 +41,9 @@ function makeScriptedDriver(frames: string[]): { driver: BrowserDriver, captures
       return next ?? ''
     },
     snapshot: async () => snapshotOf(),
+    // The stream reads a slice of the page text alongside each capture, to see
+    // a DOM edit the renderer has not repainted into its surface yet.
+    extractText: async () => ({ title: 'Example Domain', url: 'https://example.com/', text: 'example text', truncated: false }),
   } as unknown as BrowserDriver
   return { driver, captures: () => captures }
 }
@@ -136,6 +139,7 @@ describe('change detection', () => {
       listTabs: async () => [makeTab()],
       captureScreenshot: async () => 'AAAA',
       snapshot: async () => snapshotOf({ title: 'New title', url: 'https://example.com/#filtered' }),
+      extractText: async () => ({ title: 'Example', url: 'https://example.com/', text: 'example text', truncated: false }),
     } as unknown as BrowserDriver
     const stream = new ScreenshotStream(driver)
     const second = await stream.poll()
@@ -158,6 +162,7 @@ describe('change detection', () => {
         if (failSnapshot) throw new Error('Execution context was destroyed')
         return snapshotOf()
       },
+      extractText: async () => ({ title: 'Example', url: 'https://example.com/', text: 'example text', truncated: false }),
     } as unknown as BrowserDriver
     const stream = new ScreenshotStream(driver)
     await stream.poll()
@@ -184,6 +189,9 @@ describe('capture failures', () => {
         throw new Error('there is no page open to screenshot')
       },
       snapshot: async () => snapshotOf(),
+      // The stream also reads a slice of page text each capture, to detect a
+      // DOM edit the renderer has not repainted into its surface yet.
+       extractText: async () => ({ title: 'Example Domain', url: 'https://example.com/', text: 'example text', truncated: false }),
     } as unknown as BrowserDriver
     const stream = new ScreenshotStream(driver)
     await stream.poll()
@@ -197,6 +205,9 @@ describe('capture failures', () => {
       listTabs: async () => [makeTab()],
       captureScreenshot: async () => { throw new Error('there is no page open to screenshot') },
       snapshot: async () => snapshotOf(),
+      // The stream also reads a slice of page text each capture, to detect a
+      // DOM edit the renderer has not repainted into its surface yet.
+       extractText: async () => ({ title: 'Example Domain', url: 'https://example.com/', text: 'example text', truncated: false }),
     } as unknown as BrowserDriver
     const stream = new ScreenshotStream(driver)
     await expect(stream.poll()).rejects.toThrow('there is no page open to screenshot')
@@ -220,38 +231,86 @@ describe('capture failures', () => {
       listTabs: async () => [makeTab({ id: 'tab-1', selected: false }), makeTab({ id: 'tab-2', selected: true })],
       captureScreenshot: async (_fullPage: boolean, tabId: string) => `shot:${tabId}`,
       snapshot: async () => snapshotOf(),
+      // The stream also reads a slice of page text each capture, to detect a
+      // DOM edit the renderer has not repainted into its surface yet.
+       extractText: async () => ({ title: 'Example Domain', url: 'https://example.com/', text: 'example text', truncated: false }),
     } as unknown as BrowserDriver
     const stream = new ScreenshotStream(driver)
     await expect(stream.poll()).resolves.toMatchObject({ changed: true, frame: { data: 'shot:tab-2' } })
   })
 
-  it('passes the configured scale down to the capture', async () => {
-    // Downscaling inside Chrome is what keeps a frame inside the poll budget,
-    // so a lost scale would silently make every frame several megabytes.
-    const capture = vi.fn(async () => 'AAAA')
+  it('captures at natural size, so a poll never resizes the surface', async () => {
+    // Measured: downscaling means `Emulation.setDeviceMetricsOverride`, and a
+    // page edited from script can then be captured from its PRE-edit paint, so
+    // an edited page read as "unchanged" forever at scale 0.5 while scale 1
+    // detected it immediately. The panel scales the image for display instead,
+    // which costs the user nothing and keeps what they see correct.
+    const capture = vi.fn(async (_fullPage?: boolean, _tabId?: string, _scale?: number) => 'AAAA')
     const driver = {
       listTabs: async () => [makeTab()],
       captureScreenshot: capture,
       snapshot: async () => snapshotOf(),
+      extractText: async () => ({ title: 'Example Domain', url: 'https://example.com/', text: 'example text', truncated: false }),
     } as unknown as BrowserDriver
     await new ScreenshotStream(driver, { scale: 0.25 }).poll()
-    expect(capture).toHaveBeenCalledWith(false, 'tab-1', 0.25)
+    expect(capture).toHaveBeenCalledWith(false, 'tab-1', 1)
+  })
+
+  it('still clamps the configured scale, so the option stays meaningful', async () => {
+    // The setting is retained for explicit screenshots and for the panel's own
+    // sizing; clamping keeps a nonsense config from reaching Chrome.
+    const capture = vi.fn(async (_fullPage?: boolean, _tabId?: string, _scale?: number) => 'AAAA')
+    const driver = {
+      listTabs: async () => [makeTab()],
+      captureScreenshot: capture,
+      snapshot: async () => snapshotOf(),
+      // The stream also reads a slice of page text each capture, to detect a
+      // DOM edit the renderer has not repainted into its surface yet.
+       extractText: async () => ({ title: 'Example Domain', url: 'https://example.com/', text: 'example text', truncated: false }),
+    } as unknown as BrowserDriver
+    const stream = new ScreenshotStream(driver, { scale: 99 })
+    await stream.poll()
+    // Whatever the setting, the poll itself asks for natural size.
+    expect(capture).toHaveBeenCalledWith(false, 'tab-1', 1)
+  })
+
+  it('notices a DOM edit the renderer has not repainted', async () => {
+    // Both capture paths return byte-identical images after a scripted DOM
+    // change until the page is painted again, so a pixel-only comparison leaves
+    // the sidebar showing a stale page. The text slice is what catches it.
+    let text = 'BEFORE'
+    const driver = {
+      listTabs: async () => [makeTab()],
+      captureScreenshot: async () => 'SAME-PIXELS',
+      snapshot: async () => snapshotOf(),
+      extractText: async () => ({ title: 'Example', url: 'https://example.com/', text, truncated: false }),
+    } as unknown as BrowserDriver
+    const stream = new ScreenshotStream(driver)
+    await expect(stream.poll()).resolves.toMatchObject({ changed: true })
+    await expect(stream.poll()).resolves.toMatchObject({ changed: false })
+    text = 'AFTER - a different page'
+    await expect(stream.poll()).resolves.toMatchObject({ changed: true, frame: { id: 2 } })
   })
 
   it('clamps the configured scale into the legible band', async () => {
     // Config is user input; a scale below the floor produces an unreadable
     // thumbnail and one above 1 only wastes bytes.
-    const capture = vi.fn(async () => 'AAAA')
+    const capture = vi.fn(async (_fullPage?: boolean, _tabId?: string, _scale?: number) => 'AAAA')
     const driver = {
       listTabs: async () => [makeTab()],
       captureScreenshot: capture,
       snapshot: async () => snapshotOf(),
+      // The stream also reads a slice of page text each capture, to detect a
+      // DOM edit the renderer has not repainted into its surface yet.
+       extractText: async () => ({ title: 'Example Domain', url: 'https://example.com/', text: 'example text', truncated: false }),
     } as unknown as BrowserDriver
-    await new ScreenshotStream(driver, { scale: 0.01 }).poll()
-    expect(capture).toHaveBeenLastCalledWith(false, 'tab-1', 0.2)
-    capture.mockClear()
-    await new ScreenshotStream(driver, { scale: 8 }).poll()
-    expect(capture).toHaveBeenLastCalledWith(false, 'tab-1', 1)
+    const streams = [new ScreenshotStream(driver, { scale: 0.01 }), new ScreenshotStream(driver, { scale: 8 })]
+    // A poll asks for natural size regardless (see the scale test above); what
+    // this pins is that an out-of-band scale cannot reach Chrome unclamped.
+    for (const stream of streams) await stream.poll()
+    for (const call of capture.mock.calls) {
+      expect(call[2]).toBe(1)
+    }
   })
 })
 
@@ -285,6 +344,9 @@ describe('frame lifecycle', () => {
         return 'AAAA'
       },
       snapshot: async () => snapshotOf(),
+      // The stream also reads a slice of page text each capture, to detect a
+      // DOM edit the renderer has not repainted into its surface yet.
+       extractText: async () => ({ title: 'Example Domain', url: 'https://example.com/', text: 'example text', truncated: false }),
     } as unknown as BrowserDriver
     const onError = vi.fn()
     const stream = new ScreenshotStream(driver, { intervalMs: 1000, onError })
@@ -314,6 +376,9 @@ describe('frame lifecycle', () => {
         return 'AAAA'
       },
       snapshot: async () => snapshotOf(),
+      // The stream also reads a slice of page text each capture, to detect a
+      // DOM edit the renderer has not repainted into its surface yet.
+       extractText: async () => ({ title: 'Example Domain', url: 'https://example.com/', text: 'example text', truncated: false }),
     } as unknown as BrowserDriver
     const stream = new ScreenshotStream(driver, { intervalMs: 1000 })
     stream.start()

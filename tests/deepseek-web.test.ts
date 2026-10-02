@@ -16,6 +16,7 @@ import {
   buildExplainPrompt,
   buildTranslatePrompt,
   classifySelection,
+  engineForSelection,
   extractAnswer,
   looksSignedOut,
   translateSelection,
@@ -125,6 +126,34 @@ describe('prompt building and classification', () => {
     expect(looksSignedOut('登录 / 注册')).toBe(true)
     expect(looksSignedOut('Sign in to DeepSeek')).toBe(true)
     expect(looksSignedOut('DeepSeek-V3\n\nan answer')).toBe(false)
+  })
+})
+
+describe('engine routing: a word and a sentence want different sites', () => {
+  // 有道 answers a word lookup well and does not usefully carry a whole
+  // sentence through its URL form, so the site follows the shape of the
+  // selection unless the user pinned an engine.
+  it('sends a single word to 有道 and a sentence to Bing', () => {
+    expect(engineForSelection('光合作用').id).toBe('youdao')
+    expect(engineForSelection('photosynthesis').id).toBe('youdao')
+    expect(engineForSelection('这是一个需要翻译的完整句子。').id).toBe('bing')
+    expect(engineForSelection('this is a whole sentence that needs translating').id).toBe('bing')
+  })
+
+  it('honours a pinned engine over the rule', () => {
+    const bing = TRANSLATION_ENGINES.find(e => e.id === 'bing')!
+    expect(engineForSelection('光合作用', bing).id).toBe('bing')
+  })
+
+  it('translateSelection navigates to the site the rule chose', async () => {
+    const navigate = vi.fn(async (_url: string) => ({ ok: true, value: {} }))
+    const text = vi.fn(async () => ({ ok: true, value: { title: 'Bing', url: 'https://www.bing.com/translator', text: 'a rendered translation result that is long', truncated: false } }))
+    await translateSelection('这是一个需要翻译的完整句子。', makeApi({ navigate, text }), {
+      target: 'zh-Hans',
+      timeoutMs: 60,
+      fallbackToDeepSeek: false,
+    })
+    expect(String(navigate.mock.calls[0]![0])).toContain('bing.com/translator')
   })
 })
 

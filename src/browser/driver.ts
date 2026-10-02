@@ -91,6 +91,13 @@ function isUntrackableUrl(url: unknown): boolean {
   return UNTRACKABLE_URL_PREFIXES.some(prefix => url.startsWith(prefix))
 }
 
+/** Read a capture result's PNG payload, refusing an empty one. */
+function requireFrameData(result: { data?: unknown }): string {
+  const data = result.data
+  if (typeof data !== 'string' || data === '') throw new BrowserError('capture-failed', 'Chrome returned no screenshot data')
+  return data
+}
+
 /** Shortcuts the `browser_open` tool and the sidebar expose by name. */
 export const BROWSER_SHORTCUTS: Readonly<Record<string, string>> = {
   deepseek: 'https://chat.deepseek.com/',
@@ -316,6 +323,9 @@ export class BrowserDriver {
   private readonly tabCreationOrder = new Map<string, number>()
   private nextCreationOrder = 0
 
+  /** Renderer device pixel ratio per flat-mode session, for capture scaling. */
+  private readonly devicePixelRatios = new Map<string, number>()
+
   /**
    * Remote object id of each tab's page global scope, keyed by CDP session id.
    *
@@ -523,7 +533,12 @@ export class BrowserDriver {
     const tab = this.tabs.get(tabId)
     this.tabs.delete(tabId)
     this.tabCreationOrder.delete(tabId)
-    if (tab !== undefined) this.globalObjectIds.delete(tab.sessionId)
+    if (tab !== undefined) {
+      this.globalObjectIds.delete(tab.sessionId)
+      // Session-scoped caches belong to the destroyed renderer; keeping them
+      // would apply a stale pixel ratio to a reused session id.
+      this.devicePixelRatios.delete(tab.sessionId)
+    }
     if (this.selectedTabId === tabId) {
       const next = this.tabs.keys().next()
       this.selectedTabId = next.done ? undefined : next.value
@@ -774,6 +789,9 @@ export class BrowserDriver {
     // A navigation is about to replace the execution context, so the cached
     // global handle is dropped now rather than being recovered by the retry path.
     this.globalObjectIds.delete(tab.sessionId)
+    // The next document may render at a different pixel ratio, so the one
+    // cached for this session is no longer valid.
+    this.devicePixelRatios.delete(tab.sessionId)
     await this.waitForLoad(tab.sessionId)
     tab.url = url
     return await this.snapshot(tabId)
@@ -1234,29 +1252,94 @@ export class BrowserDriver {
   async captureScreenshot(fullPage = false, tabId?: string, scale = 1): Promise<string> {
     const tab = await this.requireTab(tabId)
     const client = await this.requireClient()
-    const params: Record<string, unknown> = { format: 'png', captureBeyondViewport: fullPage, fromSurface: true }
     const metrics = await client.sendObject('Page.getLayoutMetrics', {}, tab.sessionId).catch(() => undefined)
+    const viewport = (metrics as { cssLayoutViewport?: { clientWidth?: number, clientHeight?: number } } | undefined)?.cssLayoutViewport
     const content = (metrics as { cssContentSize?: { width?: number, height?: number } } | undefined)?.cssContentSize
-    const width = typeof content?.width === 'number' ? content.width : undefined
-    const height = typeof content?.height === 'number' ? content.height : undefined
-    if (fullPage) {
-      if (width !== undefined && height !== undefined) {
-        params.clip = { x: 0, y: 0, width, height, scale }
-      }
-    } else if (scale !== 1) {
-      // A viewport capture without a clip ignores `scale`, so derive the
-      // viewport box from the layout metrics and clip to it explicitly.
-      const viewport = (metrics as { cssLayoutViewport?: { clientWidth?: number, clientHeight?: number } } | undefined)?.cssLayoutViewport
-      const viewWidth = typeof viewport?.clientWidth === 'number' ? viewport.clientWidth : width
-      const viewHeight = typeof viewport?.clientHeight === 'number' ? viewport.clientHeight : height
-      if (viewWidth !== undefined && viewHeight !== undefined) {
-        params.clip = { x: 0, y: 0, width: viewWidth, height: viewHeight, scale }
+    const viewWidth = typeof viewport?.clientWidth === 'number' ? viewport.clientWidth : undefined
+    const viewHeight = typeof viewport?.clientHeight === 'number' ? viewport.clientHeight : undefined
+    const contentWidth = typeof content?.width === 'number' ? content.width : undefined
+    const contentHeight = typeof content?.height === 'number' ? content.height : undefined
+
+    // Two capture paths, because they answer different questions.
+    //
+    // FULL PAGE goes through the compositor. Only that path can see past the
+    // fold: measured, a 3000px page returns 758x3000 through the compositor and
+    // the viewport height through the renderer. It is a one-off, user-initiated
+    // capture, so the cost is irrelevant - but it IS the path that flashes a
+    // visible window, so it must not be the one a poll timer calls.
+    if (fullPage && contentWidth !== undefined && contentHeight !== undefined) {
+      const result = await client.sendObject('Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: true,
+        clip: { x: 0, y: 0, width: contentWidth, height: contentHeight, scale },
+      }, tab.sessionId)
+      return requireFrameData(result)
+    }
+
+    // THE LIVE VIEW goes through the renderer, which does not touch the window
+    // the user is looking at. That is the whole point: polling it every second
+    // must not make their browser flash.
+    //
+    // The renderer honours neither `clip` nor `captureBeyondViewport` (measured:
+    // four different clip requests returned byte-identical images), so there is
+    // no way to downscale it at capture time.
+    //
+    // At scale 1 - which is what change detection runs at, and what an
+    // unscaled screenshot asks for - the natural surface is already the right
+    // answer and NO override is applied: resizing the metrics on every poll
+    // reflows the page each time, and a capture taken mid-reflow can return the
+    // pre-change pixels, so an edited page reads as unchanged.
+    if (viewWidth === undefined || viewHeight === undefined || viewWidth <= 0 || viewHeight <= 0) {
+      throw new BrowserError('capture-failed', 'the page reported no size to capture')
+    }
+    if (scale === 1) {
+      const result = await client.sendObject('Page.captureScreenshot', { format: 'png', fromSurface: false }, tab.sessionId)
+      return requireFrameData(result)
+    }
+
+    const ratio = await this.devicePixelRatio(client, tab.sessionId)
+    const override = {
+      width: Math.max(1, Math.round(viewWidth * scale)),
+      height: Math.max(1, Math.round(viewHeight * scale)),
+      deviceScaleFactor: ratio,
+      mobile: false,
+    }
+    let applied = false
+    try {
+      await client.send('Emulation.setDeviceMetricsOverride', override, tab.sessionId)
+      applied = true
+      const result = await client.sendObject('Page.captureScreenshot', { format: 'png', fromSurface: false }, tab.sessionId)
+      return requireFrameData(result)
+    } finally {
+      // The page must be left exactly as found: a lingering metrics override
+      // would resize the user's real window and survive a navigation.
+      if (applied) {
+        await client.send('Emulation.clearDeviceMetricsOverride', {}, tab.sessionId).catch(() => undefined)
       }
     }
-    const result = await client.sendObject('Page.captureScreenshot', params, tab.sessionId)
-    const data = result.data
-    if (typeof data !== 'string' || data === '') throw new BrowserError('capture-failed', 'Chrome returned no screenshot data')
-    return data
+  }
+
+  /**
+   * The device pixel ratio of a tab's renderer, cached per session.
+   *
+   * Only the non-compositor capture path needs it, and it cannot change without
+   * a navigation that would give the session a new id, so one small evaluate
+   * per page is enough.
+   * @param client - the CDP client.
+   * @param sessionId - the tab's flat-mode session id.
+   * @returns the ratio, or 1 when it cannot be read.
+   */
+  private async devicePixelRatio(client: CdpClient, sessionId: string): Promise<number> {
+    const cached = this.devicePixelRatios.get(sessionId)
+    if (cached !== undefined) return cached
+    const read = await client
+      .sendObject('Runtime.evaluate', { expression: 'window.devicePixelRatio' }, sessionId)
+      .catch(() => undefined)
+    const value = (read as { result?: { value?: unknown } } | undefined)?.result?.value
+    const ratio = typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1
+    this.devicePixelRatios.set(sessionId, ratio)
+    return ratio
   }
 
   /**
@@ -1345,6 +1428,7 @@ export class BrowserDriver {
     this.disposed = true
     this.tabs.clear()
     this.tabCreationOrder.clear()
+    this.devicePixelRatios.clear()
     this.selectedTabId = undefined
     this.client?.dispose()
     this.client = undefined

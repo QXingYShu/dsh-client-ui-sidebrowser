@@ -253,12 +253,18 @@ function useLiveSettings(): EffectiveSettings {
 }
 
 /**
- * Pick a translation engine by id, falling back to the first built-in.
+ * Pick a translation engine by id, or undefined to let the selection decide.
+ *
+ * `auto` (the default) hands the choice to `engineForSelection`, which sends a
+ * single word to 有道 and a sentence to Bing — a word is an explanation request
+ * and a sentence is a translation request, and 有道's URL form only answers the
+ * first. Any other id is an explicit pin and is honoured as written.
  * @param id - the configured engine id.
- * @returns the engine to use.
+ * @returns the pinned engine, or undefined when the setting is `auto`.
  */
-function engineFor(id: string | undefined): (typeof TRANSLATION_ENGINES)[number] {
-  return TRANSLATION_ENGINES.find(engine => engine.id === id) ?? TRANSLATION_ENGINES[0]!
+function engineFor(id: string | undefined): (typeof TRANSLATION_ENGINES)[number] | undefined {
+  if (id === undefined || id === '' || id === 'auto') return undefined
+  return TRANSLATION_ENGINES.find(engine => engine.id === id)
 }
 
 /**

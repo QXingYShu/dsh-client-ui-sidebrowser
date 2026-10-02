@@ -56,6 +56,14 @@ export interface ScreenshotFrame {
   url: string
   /** Capture time as an ISO timestamp. */
   capturedAt: string
+  /**
+   * Leading slice of the page text, carried on the Host only.
+   *
+   * Never sent to the client — it exists so change detection can see a DOM edit
+   * that the renderer has not repainted into its surface yet, which is a real
+   * case and otherwise leaves the sidebar showing a stale page.
+   */
+  probe?: string
 }
 
 /** What a poll returns: either a fresh frame or proof the view is unchanged. */
@@ -172,19 +180,40 @@ export class ScreenshotStream {
   }
 
   /**
-   * Capture one frame and update the change baseline if the pixels differ.
+   * Capture one frame and update the change baseline if the view differs.
    *
-   * The comparison is on the encoded PNG bytes. Two frames that encode to the
-   * same bytes are visually identical by definition, so this is both exact and
-   * free — no image decoding on the Host.
+   * Two frames are compared on the encoded PNG bytes AND on the page text.
+   *
+   * The bytes alone are not enough, and measuring showed why: after a DOM
+   * change driven from script (`element.textContent = ...`), both capture paths
+   * return byte-identical images - the renderer surface is not repainted
+   * without a frame of its own - while `browser_read` correctly reports the new
+   * text. A pure pixel comparison therefore called an edited page "unchanged"
+   * and the sidebar sat on a stale image.
+   *
+   * The text is already read for each frame's title and url, so folding it into
+   * the same comparison costs nothing and catches exactly the case the pixels
+   * miss. A genuinely still page yields identical bytes and identical text, so
+   * this does not make the cheap poll expensive.
    * @returns the newly stored frame.
    */
   private async capture(): Promise<ScreenshotFrame> {
+    // Captured at natural size, deliberately, and downsampled only in the
+    // change comparison. Downscaling means resizing the renderer's surface via
+    // `Emulation.setDeviceMetricsOverride`, and a page edited from script can be
+    // captured from its pre-edit paint while the override is in place — measured:
+    // at scale 0.5 an edited page read as "unchanged" indefinitely, at scale 1 it
+    // was detected immediately. One natural-size capture per poll is what makes
+    // the sidebar show what the user actually sees.
     const data = await this.captureScaled()
     const snapshot = await this.driver.snapshot().catch(() => undefined)
+    // A short prefix is enough to notice a scroll or an edit, and keeps the
+    // comparison cheap on a long page.
+    const text = await this.driver.extractText({ maxChars: 2_000 }).catch(() => undefined)
+    const probe = text?.text
     const previous = this.last
-    if (previous !== undefined && previous.data === data) {
-      // Identical pixels: keep the existing frame id so the client can tell
+    if (previous !== undefined && this.sameView(previous, data, probe)) {
+      // Identical view: keep the existing frame id so the client can tell
       // "nothing changed" from "a new frame that happens to look the same".
       previous.title = snapshot?.title ?? previous.title
       previous.url = snapshot?.url ?? previous.url
@@ -196,9 +225,27 @@ export class ScreenshotStream {
       title: snapshot?.title ?? '',
       url: snapshot?.url ?? '',
       capturedAt: new Date().toISOString(),
+      probe,
     }
     this.last = frame
     return frame
+  }
+
+  /**
+   * Whether two captures show the same view.
+   *
+   * Both signals are needed, and each covers the other's blind spot: the page
+   * text catches a DOM edit that has not been repainted into the captured
+   * surface, and the pixels catch movement that leaves the first slice of text
+   * unchanged.
+   * @param previous - the retained frame.
+   * @param data - the freshly captured PNG.
+   * @param probe - the fresh page-text slice.
+   * @returns whether the view is unchanged.
+   */
+  private sameView(previous: ScreenshotFrame, data: string, probe: string | undefined): boolean {
+    if (previous.probe !== undefined && probe !== undefined && previous.probe !== probe) return false
+    return previous.data === data
   }
 
   /**
@@ -219,7 +266,10 @@ export class ScreenshotStream {
     // cold start — before any tab exists — is the normal case, not an internal
     // failure, and it must not read as a server error.
     if (tab === undefined) throw new BrowserError('no-tab', 'there is no page open to screenshot')
-    return await this.driver.captureScreenshot(this.fullPage, tab.id, this.scale)
+    // Scale 1 deliberately: the poll must not resize the surface, for the
+    // reason given on capture(). The panel scales the image down for display,
+    // which costs the user nothing and keeps the Host copy cheap to compare.
+    return await this.driver.captureScreenshot(this.fullPage, tab.id, 1)
   }
 
   /**

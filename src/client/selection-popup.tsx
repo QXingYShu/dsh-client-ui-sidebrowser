@@ -32,7 +32,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { SideBrowserApi } from './api.ts'
 import css from './sidebrowser.module.css'
 import { OWN_SURFACE_ATTRIBUTE, copyToClipboard, positionPopup, type DetectedSelection } from './selection.ts'
-import { askDeepSeekWeb, buildExplainPrompt, translateSelection, type BridgeStage, type TranslationEngine } from './deepseek-web.ts'
+import { askDeepSeekWeb, buildExplainPrompt, engineForSelection, translateSelection, type BridgeStage, type TranslationEngine } from './deepseek-web.ts'
 import { t } from './locales.ts'
 
 /** Props the popup renders from. */
@@ -41,8 +41,8 @@ export interface SelectionPopupProps {
   selection: DetectedSelection
   /** Route client for the host browser. */
   api: SideBrowserApi
-  /** Translation engine to try first. */
-  engine: TranslationEngine
+  /** Engine to force, or undefined to let the selection decide (word vs sentence). */
+  engine: TranslationEngine | undefined
   /** Target language code the engine understands. */
   targetLanguage: string
   /** How long to wait for DeepSeek's answer. */
@@ -166,11 +166,15 @@ export function SelectionPopup(props: SelectionPopupProps): React.ReactElement |
   }, [api, props.answerTimeoutMs, selection.kind, selection.text])
 
   const translate = useCallback(async (): Promise<void> => {
-    setActivity({ kind: 'translating', stage: t('translate.opening', { engine: props.engine.name }) })
+    // Resolve the engine here rather than inside translateSelection, so the
+    // status line can name the site actually being used. With the setting on
+    // `auto` that is 有道 for a single word and Bing for a sentence.
+    const engine = engineForSelection(selection.text, props.engine)
+    setActivity({ kind: 'translating', stage: t('translate.opening', { engine: engine.name }) })
     setError(undefined)
     setWarning(undefined)
     const outcome = await translateSelection(selection.text, api, {
-      engine: props.engine,
+      engine,
       target: props.targetLanguage,
       timeoutMs: 15_000,
       onProgress: (stage, detail) => {
@@ -195,8 +199,8 @@ export function SelectionPopup(props: SelectionPopupProps): React.ReactElement |
         // fallback was tried and failed — say why, rather than showing an
         // empty result box that looks like an empty translation.
         setWarning(outcome.note === undefined
-          ? t('translate.siteResult', { engine: props.engine.name })
-          : t('translate.fallbackUsed', { engine: props.engine.name }))
+          ? t('translate.siteResult', { engine: engine.name })
+          : t('translate.fallbackUsed', { engine: engine.name }))
         return
       case 'host-error':
         setError(t('translate.failed', { error: outcome.reason }))

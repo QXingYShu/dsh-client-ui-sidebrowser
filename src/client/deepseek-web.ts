@@ -424,7 +424,9 @@ export async function translateSelection(
 ): Promise<TranslationOutcome> {
   const trimmed = text.trim()
   if (trimmed === '') return { kind: 'empty' }
-  const engine = options.engine ?? TRANSLATION_ENGINES[0]!
+  // Word vs sentence picks the site: see engineForSelection. A caller that
+  // pinned an engine keeps it.
+  const engine = engineForSelection(trimmed, options.engine)
   const target = options.target ?? 'zh-Hans'
   const timeoutMs = options.timeoutMs ?? 15_000
 
@@ -472,6 +474,28 @@ export async function translateSelection(
       ? outcome.kind
       : undefined,
   }
+}
+
+/**
+ * Choose the engine for a selection.
+ *
+ * The two things a user selects want different sites. A single word is really an
+ * "explain this word" request, and 有道's dictionary entry answers that far
+ * better than a sentence-level translator does. A sentence is a real
+ * translation request, and 有道's URL form does not carry one — it answers a
+ * phrase lookup with nothing useful — so a phrase goes to Bing.
+ *
+ * An engine the user pinned in settings always wins; this only decides the
+ * default when they have not chosen one.
+ * @param selection - the selected text.
+ * @param preferred - the configured engine, when the user set one.
+ * @returns the engine to use.
+ */
+export function engineForSelection(selection: string, preferred?: TranslationEngine): TranslationEngine {
+  if (preferred !== undefined) return preferred
+  const kind = classifySelection(selection)
+  const wanted = kind === 'word' ? 'youdao' : 'bing'
+  return TRANSLATION_ENGINES.find(engine => engine.id === wanted) ?? TRANSLATION_ENGINES[0]!
 }
 
 /** Options for one {@link translateSelection} call. */

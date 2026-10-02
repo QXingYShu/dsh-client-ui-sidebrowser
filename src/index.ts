@@ -97,7 +97,14 @@ export interface Config {
    * path read the same value.
    */
   targetLanguage?: Volatile<string>
-  /** Which translation site 翻译 prefers: `youdao`, `bing` or `baidu`. */
+  /**
+   * Which translation site 翻译 prefers: `auto`, `youdao`, `bing` or `baidu`.
+   *
+   * `auto` is the default and is deliberately not one site: a single-word
+   * selection is an explanation request and goes to 有道, while a sentence is a
+   * translation request and goes to Bing, because 有道's URL form does not
+   * carry a full sentence usefully.
+   */
   translationEngine?: Volatile<string>
 }
 
@@ -139,7 +146,7 @@ export const Config = z.object({
   defaultUrl: z.string().default('https://chat.deepseek.com/').volatile(),
   shortcuts: z.string().default('').volatile(),
   targetLanguage: z.string().default('zh-Hans').volatile(),
-  translationEngine: z.string().default('youdao').volatile(),
+  translationEngine: z.string().default('auto').volatile(),
 })
 
 /** The registry face the agent tools register into. */
