@@ -216,28 +216,74 @@ export function extractAnswer(pageText: string): string {
   const trimmed = pageText.trim()
   if (trimmed === '') return ''
 
-  for (const marker of USER_TURN_MARKERS) {
-    const index = lastIndexOfMarker(trimmed, marker)
-    if (index >= 0) {
-      const tail = trimmed.slice(index + marker.length).trim()
-      if (tail !== '') return tail
-    }
-  }
+  // Both anchors are positions in the rendered text, and the assistant's own
+  // attribution is the better one: a user turn is rendered as its label ("You")
+  // followed by the message body, so cutting at the label necessarily swallows
+  // the user's own message. The assistant turn is labelled with the model name
+  // and its text follows that label directly.
+  const userIndex = lastMarkerIndex(trimmed, USER_TURN_MARKERS)
+  const attributionIndex = lastAttributionIndex(trimmed)
 
-  const attribution = /deepseek/gi
-  let match: RegExpExecArray | null = attribution.exec(trimmed)
-  let lastAttribution = -1
-  while (match !== null) {
-    lastAttribution = match.index + match[0].length
-    match = attribution.exec(trimmed)
+  const anchor = attributionIndex > userIndex ? attributionIndex : userIndex
+  if (anchor >= 0) {
+    const tail = trimmed.slice(anchor).trim()
+    // A label with no body yet means the answer has not arrived. Returning it
+    // would show the user a popup reading "DeepSeek-V3" and, because the text
+    // never changes, the caller would treat it as a finished answer.
+    if (tail !== '' && !isTurnLabel(tail)) return tail
   }
-  if (lastAttribution >= 0) {
-    const tail = trimmed.slice(lastAttribution).trim()
-    if (tail !== '') return tail
-  }
-
+  // An anchor that yields nothing usable (a trailing label with an empty body)
+  // must not end the attempt: fall through to the block heuristic below.
   const blocks = trimmed.split(/\n{2,}/).filter(block => block.trim() !== '')
-  return blocks.length === 0 ? '' : (blocks[blocks.length - 1] ?? '').trim()
+  const last = blocks.length === 0 ? '' : (blocks[blocks.length - 1] ?? '').trim()
+  return isTurnLabel(last) ? '' : last
+}
+
+/**
+ * Whether a block is only a turn label rather than a message.
+ *
+ * A conversation whose last block is "DeepSeek-V3" or "You" has a turn that was
+ * rendered without a body yet, which is not an answer.
+ * @param block - the trimmed text of one block.
+ * @returns whether it is a bare label.
+ */
+function isTurnLabel(block: string): boolean {
+  return /^(?:you|你|deepseek[\w.-]*)$/i.test(block)
+}
+
+/**
+ * Index just past the last whole-line occurrence of any user-turn marker.
+ * @param text - the page text.
+ * @returns the end index of the marker, or -1 when no marker is on its own line.
+ */
+function lastMarkerIndex(text: string, markers: readonly string[]): number {
+  let best = -1
+  for (const marker of markers) {
+    const index = lastIndexOfMarker(text, marker)
+    if (index >= 0 && index + marker.length > best) best = index + marker.length
+  }
+  return best
+}
+
+/**
+ * Index just past the end of the last assistant label in the page text.
+ *
+ * The label is the model name ("DeepSeek-V3", "DeepSeek-R1"), so matching only
+ * the word and cutting there would leave the version suffix ("-V3") welded onto
+ * the first word of the answer. The scan therefore takes the whole
+ * whitespace-delimited word the match landed in.
+ * @param text - the page text.
+ * @returns the index just past the label word, or -1 when there is none.
+ */
+function lastAttributionIndex(text: string): number {
+  const attribution = /deepseek[\w.-]*/gi
+  let match: RegExpExecArray | null = attribution.exec(text)
+  let last = -1
+  while (match !== null) {
+    last = match.index + match[0].length
+    match = attribution.exec(text)
+  }
+  return last
 }
 
 /**
@@ -558,7 +604,13 @@ export async function askDeepSeekWeb(
     const pageText = read.value.text
     if (looksSignedOut(pageText)) return { kind: 'login-required' }
     const answer = extractAnswer(pageText)
-    if (answer !== '') {
+    // Before the assistant types anything, the page ends with the user's own
+    // turn, and the cut from there is the prompt that was just sent. Treating
+    // it as an answer is stable, so the poll loop would settle on it and the
+    // popup would show the user their own selection back as DeepSeek's reply.
+    // An answer identical to what we typed is therefore not yet an answer.
+    const isEcho = answer !== '' && answer === prompt.trim()
+    if (answer !== '' && !isEcho) {
       if (answer.length === previousLength) {
         quiet += 1
         if (quiet >= QUIET_POLLS) {
