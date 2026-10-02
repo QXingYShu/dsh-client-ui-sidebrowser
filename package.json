@@ -75,7 +75,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dsh-sidebrowser/dsh-client-ui-sidebrowser.git"
+    "url": "https://github.com/QXingYShu/dsh-client-ui-sidebrowser.git"
   },
   "scripts": {
     "build": "tsdown",

@@ -86,8 +86,8 @@ pwsh -File scripts/install-local.ps1
 ```
 
 - `<profile>` is your dsh profile name, usually `desktop` or `web`;
-- once the repository is published, a git URL works too:
-  `dsh plugin --profile desktop add git+https://github.com/<owner>/dsh-sidebrowser.git`.
+- a git URL works too (the repository is published):
+  `dsh plugin --profile desktop add git+https://github.com/QXingYShu/dsh-client-ui-sidebrowser.git`.
   The package has a `prepare` script, so the bundles are built automatically on
   install — but pnpm may block lifecycle scripts by default and prompt you to
   approve them (`pnpm approve-builds`); if `lib/` ends up empty, activation

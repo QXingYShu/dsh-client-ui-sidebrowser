@@ -85,7 +85,7 @@ pwsh -File scripts/install-local.ps1
 ```
 
 - `<profile>` 是你的 dsh profile 名，通常是 `desktop` 或 `web`；
-- 仓库发布到 GitHub 之后，也可以直接用 git URL 安装：`dsh plugin --profile desktop add git+https://github.com/<owner>/dsh-sidebrowser.git`。
+- 也可以直接用 git URL 安装（仓库已发布）：`dsh plugin --profile desktop add git+https://github.com/QXingYShu/dsh-client-ui-sidebrowser.git`。
   本包有 `prepare` 脚本，安装时会自动构建 `lib/` —— 但 pnpm 默认可能拦截
   生命周期脚本并提示你批准（`pnpm approve-builds`）；如果装完 `lib/` 是空的，
   插件激活会直接报错。
