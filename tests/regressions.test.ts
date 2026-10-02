@@ -443,6 +443,59 @@ describe('host: a tab the user closes is dropped the moment it is destroyed', ()
   })
 })
 
+describe('host: the browser\'s own blank tabs are not tracked', () => {
+  // A freshly launched Chrome always has a chrome://newtab surface. Tracking it
+  // puts a page with nothing to read at the head of the strip, and - worse -
+  // synthesized input and capture addressed at it hang until the command
+  // timeout instead of answering (observed as a 30s CDP timeout on scroll).
+  it('skips blank surfaces and drops a tab navigated onto one', async () => {
+    const { BrowserDriver } = await import('../src/browser/driver.ts')
+    const driver = new BrowserDriver({ executablePath: '/definitely/not/a/browser' })
+    const internals = driver as unknown as {
+      tabs: Map<string, { id: string, targetId: string, sessionId: string, selected: boolean }>
+      selectedTabId: string | undefined
+      client: unknown
+      watchDestroyedTargets: (client: unknown) => void
+    }
+
+    // A tab the user has already navigated onto a blank surface. The id is
+    // deliberately NOT `tab-1`: the driver allocates ids from its own counter, so
+    // a hand-picked id can collide with the one the real page is given.
+    internals.tabs.set('seeded-blank', { id: 'seeded-blank', targetId: 'T-NEW', sessionId: 'S-1', selected: true })
+    internals.selectedTabId = 'seeded-blank'
+
+    let attaches = 0
+    internals.client = {
+      isOpen: true,
+      on: (): (() => void) => () => {},
+      sendObject: async (method: string): Promise<Record<string, unknown>> => {
+        if (method === 'Target.getTargets') {
+          return {
+            targetInfos: [
+              { targetId: 'T-NEW', type: 'page', url: 'chrome://newtab/', title: '' },
+              { targetId: 'T-REAL', type: 'page', url: 'https://example.com/', title: 'Example' },
+            ],
+          }
+        }
+        if (method === 'Target.attachToTarget') { attaches += 1; return { sessionId: 'S-2' } }
+        return {}
+      },
+      send: async (): Promise<Record<string, unknown>> => ({}),
+      dispose: (): void => {},
+    }
+
+    const tabs = await driver.listTabs()
+
+    expect(tabs.map(t => t.targetId)).toEqual(['T-REAL'])
+    expect(internals.tabs.has('seeded-blank')).toBe(false)
+    // Selection moved off the blank page rather than dangling on it.
+    expect(internals.selectedTabId).toBe(tabs[0]!.id)
+    // Only the real page was ever attached to.
+    expect(attaches).toBe(1)
+    await driver.dispose()
+  })
+})
+
 describe('host: destroyed tabs are dropped from the tracked strip', () => {
   // The bug: `refreshTargets` only ever ADDED targets. A tab closed by the user
   // was re-adopted from a stale `Target.getTargets` as a new record with the

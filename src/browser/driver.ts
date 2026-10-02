@@ -66,6 +66,31 @@ const SCREENSHOT_PREFIX = 'dsh-sidebrowser-shot-'
 /** How long a written screenshot survives before a later capture prunes it. */
 const SCREENSHOT_RETENTION_MS = 6 * 60 * 60 * 1000
 
+/**
+ * Targets the plugin refuses to track.
+ *
+ * Chrome's own blank surfaces carry no page an agent can read or act on, and
+ * they are the one place where synthesized input and capture misbehave: a
+ * `Page.captureScreenshot` or `Input.dispatchMouseEvent` addressed at
+ * `chrome://newtab` can hang until the command timeout instead of answering.
+ * A freshly launched browser always has one, so adopting it would put a dead
+ * tab at the head of the strip and, worse, let it become the selection the next
+ * command acts on.
+ */
+const UNTRACKABLE_URL_PREFIXES: readonly string[] = [
+  'about:blank',
+  'chrome://newtab',
+  'chrome://new-tab-page',
+  'edge://newtab',
+  'edge://new-tab-page',
+]
+
+/** Whether a target url is one the plugin will not track. */
+function isUntrackableUrl(url: unknown): boolean {
+  if (typeof url !== 'string') return false
+  return UNTRACKABLE_URL_PREFIXES.some(prefix => url.startsWith(prefix))
+}
+
 /** Shortcuts the `browser_open` tool and the sidebar expose by name. */
 export const BROWSER_SHORTCUTS: Readonly<Record<string, string>> = {
   deepseek: 'https://chat.deepseek.com/',
@@ -548,7 +573,16 @@ export class BrowserDriver {
       const info = raw as { targetId?: string, type?: string, url?: string, title?: string }
       if (info.type !== 'page' || typeof info.targetId !== 'string') continue
       live.add(info.targetId)
-      if (this.findByTargetId(info.targetId) !== undefined) continue
+      // Skip the browser's own blank surfaces (see UNTRACKABLE_URL_PREFIXES),
+      // and drop any tracked tab the user navigated onto one: neither is a page
+      // the agent can read, and the selection must not settle on it.
+      const infoUrl = typeof info.url === 'string' ? info.url : ''
+      const existing = this.findByTargetId(info.targetId)
+      if (isUntrackableUrl(infoUrl)) {
+        if (existing !== undefined) this.dropTab(existing.id)
+        continue
+      }
+      if (existing !== undefined) continue
       const id = this.newTabId()
       this.tabs.set(id, {
         id,
