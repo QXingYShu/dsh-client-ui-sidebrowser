@@ -234,7 +234,12 @@ function failureOf(error: unknown): { status: number, body: Record<string, unkno
  * @param stream - the screenshot stream the client polls for its live view.
  * @returns the routes, ready to hand to `ctx.webServer.register`.
  */
-export function makeSidebrowserRoutes(driver: BrowserDriver, stream: ScreenshotStream): WebRoute[] {
+export function makeSidebrowserRoutes(
+  driver: BrowserDriver,
+  stream: ScreenshotStream,
+  /** The Host's resolved plugin config, served to the client half at startup. */
+  readConfig?: () => Record<string, unknown>,
+): WebRoute[] {
   /**
    * Apply the trust fence, answering 403 itself when the request is untrusted.
    * @param req - the incoming request.
@@ -323,6 +328,18 @@ export function makeSidebrowserRoutes(driver: BrowserDriver, stream: ScreenshotS
       })()
     },
   })
+
+  /**
+   * The Host's resolved configuration.
+   *
+   * The client half used to take its settings from a `configForms` service that
+   * no shipped DSH package provides, so every setting silently fell back to the
+   * client's own compiled-in defaults - a translation site the user had not
+   * chosen, an interval they had not set. This route is the channel that
+   * actually exists: the Host holds the authoritative values, and the browser
+   * asks for them once at startup.
+   */
+  const config = get('config', async () => ({ ok: true, config: readConfig?.() ?? {} }))
 
   const state = get('state', async () => ({
     ok: true,
@@ -531,5 +548,5 @@ export function makeSidebrowserRoutes(driver: BrowserDriver, stream: ScreenshotS
     }
   })
 
-  return [state, navigate, back, forward, reload, tabs, openTab, closeTab, selectTab, screenshot, frame, text, click, type, key, scroll, evalSafe]
+  return [config, state, navigate, back, forward, reload, tabs, openTab, closeTab, selectTab, screenshot, frame, text, click, type, key, scroll, evalSafe]
 }

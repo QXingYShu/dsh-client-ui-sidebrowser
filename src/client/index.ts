@@ -16,5 +16,6 @@ export {
   SIDEBROWSER_TAB_ID,
   SIDEBROWSER_TAB_KIND,
   SideBrowserSettingsCard,
+  readCurrentSettings,
 } from './surfaces.tsx'
 export type { SideBrowserSettings } from './surfaces.tsx'

@@ -33,11 +33,15 @@ function makeStreamStub(poll: ScreenshotStream['poll']): ScreenshotStream {
  * @param poll - what `GET /frame` should answer with.
  * @returns the routes, keyed by path segment.
  */
-function makeRoutes(driver: BrowserDriver, poll?: ScreenshotStream['poll']): Map<string, WebRoute> {
+function makeRoutes(
+  driver: BrowserDriver,
+  poll?: ScreenshotStream['poll'],
+  readConfig?: () => Record<string, unknown>,
+): Map<string, WebRoute> {
   const stream = makeStreamStub(poll ?? (async () => {
     throw new Error('there is no page open to screenshot')
   }))
-  return new Map(makeSidebrowserRoutes(driver, stream).map(route => [route.path, route]))
+  return new Map(makeSidebrowserRoutes(driver, stream, readConfig).map(route => [route.path, route]))
 }
 
 /**
@@ -128,6 +132,30 @@ describe('trust fence predicate', () => {
 })
 
 describe('route table', () => {
+  it('serves the Host\'s resolved settings, which the client cannot get elsewhere', async () => {
+    // The client half used to read its settings from a `configForms` service that
+    // no shipped DSH package provides, so it silently ran on compiled-in
+    // defaults: a translation site the user never chose, a capture interval they
+    // never set. This route is the channel that exists.
+    const settings = {
+      translationEngine: 'bing',
+      targetLanguage: 'zh-Hans',
+      captureIntervalMs: 3000,
+      enabled: true,
+    }
+    const routes = makeRoutes(makeDriverStub().driver, undefined, () => settings)
+    const recorded = await call(routes, `${SIDEBROWSER_API_PREFIX}/config`, sameOrigin({ method: 'GET' }))
+    expect(recorded.status).toBe(200)
+    expect(recorded.body).toMatchObject({ ok: true, config: settings })
+  })
+
+  it('answers an empty config rather than failing when the Host has none to give', async () => {
+    const routes = makeRoutes(makeDriverStub().driver)
+    const recorded = await call(routes, `${SIDEBROWSER_API_PREFIX}/config`, sameOrigin({ method: 'GET' }))
+    expect(recorded.status).toBe(200)
+    expect(recorded.body).toMatchObject({ ok: true, config: {} })
+  })
+
   it('registers every documented endpoint under one prefix', () => {
     // One prefix means the fence is applied in exactly one place; a route
     // registered outside it would be unfenced by construction.
@@ -135,6 +163,7 @@ describe('route table', () => {
     expect(paths).toEqual([
       `${SIDEBROWSER_API_PREFIX}/back`,
       `${SIDEBROWSER_API_PREFIX}/click`,
+      `${SIDEBROWSER_API_PREFIX}/config`,
       `${SIDEBROWSER_API_PREFIX}/eval-safe`,
       `${SIDEBROWSER_API_PREFIX}/forward`,
       `${SIDEBROWSER_API_PREFIX}/frame`,

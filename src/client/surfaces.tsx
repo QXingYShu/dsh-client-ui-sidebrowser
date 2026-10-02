@@ -197,6 +197,50 @@ let settingsFeed: SettingsFeed = {
 }
 
 /**
+ * The Host's settings, held for every surface to read.
+ *
+ * This is what makes the plugin's configuration real. The `configForms` client
+ * service the settings used to be bound through is not served by any shipped
+ * DSH package, so `bindSettingsForm` always produced an unavailable form and
+ * the client silently ran on its compiled-in defaults - which is why a chosen
+ * translation site, capture interval or target language never took effect.
+ * Reading `/api/sidebrowser/config` uses the channel that actually exists: the
+ * Host owns the schema and the volatile fields.
+ *
+ * The feed object is created once and never replaced, so a surface that
+ * subscribed before the first fetch is still notified when values arrive.
+ */
+let hostSettings: Record<string, unknown> = {}
+const settingsListeners = new Set<() => void>()
+
+/** Publish new settings to every mounted surface. */
+function publishHostSettings(next: Record<string, unknown>): void {
+  hostSettings = next
+  for (const listener of [...settingsListeners]) listener()
+}
+
+/** The stable feed: reads the latest Host settings, notifies on change. */
+const hostSettingsFeed: SettingsFeed = {
+  read: () => effectiveSettings(hostSettings),
+  subscribe: (listener: (settings: SideBrowserSettings) => void): (() => void) => {
+    const wrapped = (): void => listener(effectiveSettings(hostSettings))
+    settingsListeners.add(wrapped)
+    return () => { settingsListeners.delete(wrapped) }
+  },
+}
+
+/**
+ * Ask the Host for its settings and publish them.
+ * @param api - the route client.
+ * @returns nothing; a failed read leaves the compiled-in defaults in place.
+ */
+async function loadHostSettings(api: SideBrowserApi): Promise<void> {
+  const result = await api.config()
+  if (!result.ok) return
+  publishHostSettings(result.value)
+}
+
+/**
  * The client context, captured for components that receive no props.
  *
  * The footer row and the menu item are registered as bare components with no
@@ -429,6 +473,17 @@ function SideBrowserTabMenuItem(props: Record<string, unknown>): React.ReactElem
 export const SETTINGS_ENTRY_IDS = [ 'ui-sidebrowser', SETTINGS_NAMESPACE ]
 
 /**
+ * The settings every surface currently sees.
+ *
+ * Exposed for tests that assert the Host's values actually reach the browser
+ * half; production code reads {@link settingsFeed} directly.
+ * @returns the effective settings.
+ */
+export function readCurrentSettings(): SideBrowserSettings {
+  return settingsFeed.read()
+}
+
+/**
  * Register this plugin's dictionaries.
  *
  * `ctx.locale` comes from the locale plugin, whose type merge is not present in
@@ -482,10 +537,26 @@ export function apply(ctx: ClientContext): void {
   // before the dictionaries exist would show raw keys to the user.
   ctx.effect(() => registerDictionaries(ctx) ?? (() => {}), 'sidebrowser: dictionaries')
 
-  // Settings: one bound form, shared. A settings save reaches an already-mounted
-  // panel through this feed, with no reload.
+  // Settings come from the Host, which is where they actually live: it owns the
+  // schema and the volatile fields, and serves them at
+  // `/api/sidebrowser/config`. The settings CARD still binds through
+  // `configForms` so a Host that serves it stays editable, but that service is
+  // absent from every shipped DSH package today - depending on it alone meant
+  // the browser ran on compiled-in defaults no matter what the Host held, which
+  // is why a chosen translation site or capture interval never took effect.
   const settingsForm = bindSettingsForm(ctx, SETTINGS_ENTRY_IDS)
-  settingsFeed = createSettingsSubscription(settingsForm)
+  // A Host that serves no configuration form - which is every shipped DSH
+  // package today - leaves the form "unavailable", and a subscription to it can
+  // only ever yield the client's own defaults. In that case the Host's
+  // `/api/sidebrowser/config` is the only source of the real values, so it
+  // becomes the feed. When a form IS served, it stays authoritative for editing
+  // and the config read only refreshes it.
+  const formAvailable = settingsForm.getSnapshot().status !== 'unavailable'
+  settingsFeed = formAvailable ? createSettingsSubscription(settingsForm) : hostSettingsFeed
+  const routes = api
+  if (routes !== undefined) {
+    void loadHostSettings(routes)
+  }
 
   const slots = slotRegistry(ctx)
   if (slots === undefined) {

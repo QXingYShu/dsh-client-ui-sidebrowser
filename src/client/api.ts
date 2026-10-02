@@ -289,6 +289,24 @@ export class SideBrowserApi {
   }
 
   /**
+   * Read the Host's resolved plugin settings.
+   *
+   * This is the channel the client actually has: the Host holds the
+   * authoritative values because it owns the schema and the volatile config
+   * fields. The `configForms` client service this used to depend on is not
+   * served by any shipped DSH package, which is why every setting silently
+   * fell back to the compiled-in defaults.
+   * @returns the settings, or an empty object when the Host has none to give.
+   */
+  async config(): Promise<SideBrowserResult<Record<string, unknown>>> {
+    const result = await this.call<Record<string, unknown>>('/config')
+    if (!result.ok) return result
+    const raw = result.value.config
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ok: true, value: {} }
+    return { ok: true, value: raw as Record<string, unknown> }
+  }
+
+  /**
    * Read the browser's snapshot.
    *
    * The Host answers with a `PageSnapshot` plus the shortcut roster; there is no

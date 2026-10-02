@@ -299,10 +299,34 @@ function applyImpl(ctx: Context, config?: Config): void {
     }
   }
 
+  /**
+ * The plugin's current settings, as the client half should see them.
+ *
+ * Every field is volatile, so each value is read at use time rather than
+ * captured once. Only plain, serialisable values are exposed: the client runs in
+ * the browser and cannot hold a `Volatile` reference.
+ * @returns the settings object served by `/api/sidebrowser/config`.
+ */
+const settingsSnapshot = (): Record<string, unknown> => ({
+  enabled: enabled(),
+  selectionPopup: readConfigField(config?.selectionPopup, true),
+  agentTools: agentToolsEnabled(),
+  defaultUrl: readConfigField(config?.defaultUrl, 'https://chat.deepseek.com/'),
+  captureIntervalMs: readConfigField(config?.captureIntervalMs, 2_000),
+  targetLanguage: readConfigField(config?.targetLanguage, 'zh-Hans'),
+  translationEngine: readConfigField(config?.translationEngine, 'auto'),
+  shortcuts: readConfigField(config?.shortcuts, ''),
+  executablePath: readConfigField(config?.executablePath, ''),
+  port: readConfigField(config?.port, 0),
+  userDataDir: readConfigField(config?.userDataDir, ''),
+  headless: readConfigField(config?.headless, false),
+  captureScale: readConfigField(config?.captureScale, 0.5),
+})
+
   ctx.effect(() => {
     const disposers: Array<() => void> = []
     try {
-      for (const route of makeSidebrowserRoutes(driver, stream)) disposers.push(ctx.webServer.register(route))
+      for (const route of makeSidebrowserRoutes(driver, stream, settingsSnapshot)) disposers.push(ctx.webServer.register(route))
       setToolsEnabled(agentToolsEnabled())
       // The capture timer only runs while the row is mounted. It is started here
       // (not at apply time) so a disabled row costs nothing, and it never

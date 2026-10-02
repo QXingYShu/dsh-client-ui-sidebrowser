@@ -185,6 +185,21 @@ describe('translateSelection', () => {
     expect(outcome).toMatchObject({ kind: 'host-error', reason: 'bad-url' })
   })
 
+  it('keeps the site open instead of navigating away to the DeepSeek fallback', async () => {
+    // Reported as: "click translate, it opens Youdao, then a moment later it
+    // jumps to the DeepSeek login screen". The cause was a length heuristic that
+    // judged the rendered site unreadable and fell back - navigating away from
+    // the page the user was reading. A site that rendered ends the path.
+    const navigate = vi.fn(async (_url: string) => ({ ok: true, value: {} }))
+    const text = vi.fn(async () => ({ ok: true, value: { title: 'Youdao', url: 'https://fanyi.youdao.com/', text: '结果', truncated: false } }))
+    const type = vi.fn(async () => ({ ok: false, error: 'no such element' }))
+    const outcome = await translateSelection('hello', makeApi({ navigate, text, type }), { timeoutMs: 60 })
+    expect(outcome).toMatchObject({ kind: 'opened', engine: 'youdao' })
+    // The fallback must not have fired: exactly one navigation, the site's.
+    expect(navigate).toHaveBeenCalledOnce()
+    expect(type).not.toHaveBeenCalled()
+  })
+
   it('falls back to DeepSeek when the site yields nothing, and says which failed', async () => {
     const navigate = vi.fn(async () => ({ ok: true, value: {} }))
     // An empty page read means the site gave nothing back.

@@ -32,7 +32,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { SideBrowserApi } from './api.ts'
 import css from './sidebrowser.module.css'
 import { OWN_SURFACE_ATTRIBUTE, copyToClipboard, positionPopup, type DetectedSelection } from './selection.ts'
-import { askDeepSeekWeb, buildExplainPrompt, engineForSelection, translateSelection, type BridgeStage, type TranslationEngine } from './deepseek-web.ts'
+import { askDeepSeekWeb, buildExplainPrompt, engineForSelection, translateSelection, type BridgeStage, type DeepSeekWebOutcome, type TranslationEngine, type TranslationOutcome } from './deepseek-web.ts'
 import { t } from './locales.ts'
 
 /** Props the popup renders from. */
@@ -136,17 +136,32 @@ export function SelectionPopup(props: SelectionPopupProps): React.ReactElement |
     setActivity({ kind: 'explaining', stage: t('dsweb.opening') })
     setError(undefined)
     setWarning(undefined)
-    const outcome = await askDeepSeekWeb(
-      buildExplainPrompt(selection.text, selection.kind),
-      api,
-      {
-        timeoutMs: props.answerTimeoutMs,
-        onProgress: stage => {
-          if (!aliveRef.current) return
-          setActivity({ kind: 'explaining', stage: stageLabel(stage) })
+    // Every exit from here writes something. Without the catch, a throw anywhere
+    // in the bridge - a bad route shape, a missing method, a rejected promise -
+    // became an unhandled rejection and the button did nothing visible at all,
+    // which is the hardest kind of bug for a user to report: they simply see
+    // "nothing happens".
+    let outcome: DeepSeekWebOutcome
+    try {
+      outcome = await askDeepSeekWeb(
+        buildExplainPrompt(selection.text, selection.kind),
+        api,
+        {
+          timeoutMs: props.answerTimeoutMs,
+          onProgress: stage => {
+            if (!aliveRef.current) return
+            setActivity({ kind: 'explaining', stage: stageLabel(stage) })
+          },
         },
-      },
-    )
+      )
+    } catch (error) {
+      if (!aliveRef.current) return
+      setActivity({ kind: 'idle' })
+      setError(t('popup.error.host', {
+        error: error instanceof Error ? error.message : String(error),
+      }))
+      return
+    }
     if (!aliveRef.current) return
     if (outcome.kind === 'answer') {
       setResult({ kind: 'explanation', text: outcome.text })
@@ -173,19 +188,30 @@ export function SelectionPopup(props: SelectionPopupProps): React.ReactElement |
     setActivity({ kind: 'translating', stage: t('translate.opening', { engine: engine.name }) })
     setError(undefined)
     setWarning(undefined)
-    const outcome = await translateSelection(selection.text, api, {
-      engine,
-      target: props.targetLanguage,
-      timeoutMs: 15_000,
-      onProgress: (stage, detail) => {
-        if (!aliveRef.current) return
-        const stage1 = stageLabel(stage)
-        setActivity({
-          kind: 'translating',
-          stage: detail === undefined ? stage1 : t('translate.opening', { engine: detail }) + stage1,
-        })
-      },
-    })
+    let outcome: TranslationOutcome
+    try {
+      outcome = await translateSelection(selection.text, api, {
+        engine,
+        target: props.targetLanguage,
+        timeoutMs: 15_000,
+        onProgress: (stage, detail) => {
+          if (!aliveRef.current) return
+          const stage1 = stageLabel(stage)
+          setActivity({
+            kind: 'translating',
+            stage: detail === undefined ? stage1 : t('translate.opening', { engine: detail }) + stage1,
+          })
+        },
+      })
+    } catch (error) {
+      // As in `explain`: a throw must still say something.
+      if (!aliveRef.current) return
+      setActivity({ kind: 'idle' })
+      setError(t('translate.failed', {
+        error: error instanceof Error ? error.message : String(error),
+      }))
+      return
+    }
     if (!aliveRef.current) return
     setActivity({ kind: 'idle' })
     switch (outcome.kind) {

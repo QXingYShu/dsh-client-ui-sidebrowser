@@ -452,14 +452,27 @@ export async function translateSelection(
     const read = await api.text({ maxChars: 6_000 })
     if (!read.ok) break
     pageText = read.value.text
-    // The site has clearly rendered: it echoes the request and more besides.
-    if (pageText.length > trimmed.length * 2) break
+    if (pageText !== '') break
   }
 
+  // The site rendered. That is the end of this path, deliberately.
+  //
+  // It used to be judged by whether the page was "long enough", and a site that
+  // rendered but did not parse to a long enough string was treated as having
+  // failed - so the fallback navigated away from the very page the user was
+  // reading and replaced it with the DeepSeek login screen. The user saw their
+  // translation disappear and a login form appear, for no stated reason.
+  //
+  // The Host reads whole pages rather than one selector, so the result is not
+  // separately addressable here - but it is not needed: the live view IS the
+  // site, and the user is already looking at it.
+  if (pageText !== '') {
+    return { kind: 'opened', engine: engine.id }
+  }
+
+  // Only a site that produced no readable text at all falls back.
   if (options.fallbackToDeepSeek === false) {
-    return pageText === ''
-      ? { kind: 'host-error', reason: 'The translation site returned nothing readable' }
-      : { kind: 'opened', engine: engine.id }
+    return { kind: 'host-error', reason: 'The translation site returned nothing readable' }
   }
   const outcome = await viaDeepSeek(trimmed, target, api, options.onProgress, options.timeoutMs)
   if (outcome.kind === 'translated') return outcome

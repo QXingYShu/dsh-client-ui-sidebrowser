@@ -537,6 +537,64 @@ describe('host: screenshot files are pruned after their retention window', () =>
   })
 })
 
+describe('client: settings come from the Host, not from compiled-in defaults', () => {
+  // The symptom a user reported: whatever they configured had no effect, and
+  // translation always went to the default site. The cause was that the client
+  // read its settings from a `configForms` service that no shipped DSH package
+  // serves, so it always fell back to its own compiled-in values - including a
+  // hard-coded translation engine that overrode the word/sentence routing rule.
+  // It now reads the Host's `/api/sidebrowser/config`.
+  it('publishes the Host values to the surfaces', async () => {
+    const { apply: applyClient, readCurrentSettings } = await import('../src/client/surfaces.tsx')
+
+    const originalFetch = globalThis.fetch
+    // The client builds its own route client, so settings arrive over fetch from
+    // the Host's origin - the same path they take in production.
+    globalThis.fetch = (async (input: unknown) => {
+      if (String(input).includes('/api/sidebrowser/config')) {
+        return new Response(JSON.stringify({
+          ok: true,
+          config: { translationEngine: 'bing', targetLanguage: 'en' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    const client = {
+      // No configForms service - exactly what a real Host does not serve.
+      get: () => undefined,
+      inject: (): (() => void) => () => {},
+      effect: (fn: () => unknown): (() => void) => {
+        const dispose = fn()
+        return () => { if (typeof dispose === 'function') dispose() }
+      },
+      slots: {
+        inject: (_name: string, cb: () => unknown): (() => void) => { cb(); return () => {} },
+        register: (): (() => void) => () => {},
+      },
+      sidebarRightTabs: { register: (): (() => void) => () => {} },
+    }
+    ;(globalThis as { __dshSideBrowserApplied?: boolean }).__dshSideBrowserApplied = false
+    try {
+      applyClient(client as never)
+
+      // Before the fetch lands, the compiled-in default applies...
+      expect(readCurrentSettings().translationEngine).toBe('youdao')
+      // ...and once it lands, the Host's values replace it. Polled rather than
+      // timed, because the fetch's completion is what is under test.
+      let settings = readCurrentSettings()
+      for (let i = 0; i < 20 && settings.translationEngine !== 'bing'; i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        settings = readCurrentSettings()
+      }
+      expect(settings.translationEngine).toBe('bing')
+      expect(settings.targetLanguage).toBe('en')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
 describe('host: destroyed tabs are dropped from the tracked strip', () => {
   // The bug: `refreshTargets` only ever ADDED targets. A tab closed by the user
   // was re-adopted from a stale `Target.getTargets` as a new record with the
