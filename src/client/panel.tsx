@@ -70,8 +70,12 @@ export interface SideBrowserPanelProps {
 export function resolveAddress(raw: string): string {
   const trimmed = raw.trim()
   if (trimmed === '') return ''
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed
+  // localhost BEFORE the scheme test: `localhost:3000` matches
+  // `^[a-z][a-z0-9+.-]*:` and would otherwise be taken for a URL whose scheme
+  // is "localhost", passed through untouched, and refused by the Host as a
+  // non-http scheme. A dev server is what the user meant.
   if (/^localhost(:\d+)?(\/|$)/i.test(trimmed)) return `http://${trimmed}`
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed
   // A dotted, space-free token that looks like a host:example.tld:port/path.
   if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(trimmed)) return `https://${trimmed}`
   return `https://www.bing.com/search?q=${encodeURIComponent(trimmed)}`
