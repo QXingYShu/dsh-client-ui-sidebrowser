@@ -496,6 +496,47 @@ describe('host: the browser\'s own blank tabs are not tracked', () => {
   })
 })
 
+describe('host: screenshot files are pruned after their retention window', () => {
+  // The file must outlive the call - the agent opens the returned path in a
+  // later turn - so it cannot be deleted on return. Without a sweep the temp
+  // directory grows by one PNG per screenshot for the life of the machine.
+  it('deletes only this plugin\'s aged screenshots', async () => {
+    const { writeFileSync, utimesSync, existsSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+
+    // The production code sweeps `tmpdir()`, so this test owns the real one:
+    // the names are unique per run, and only prefixed files are ever touched.
+    const marker = `dsh-sidebrowser-shot-probe-${process.pid}-${Date.now()}`
+    const aged = join(tmpdir(), `${marker}-aged.png`)
+    const fresh = join(tmpdir(), `${marker}-fresh.png`)
+    // Not one of ours: same run, someone else's file. A sweep that touched it
+    // would be deleting another tool's data.
+    const survivor = join(tmpdir(), `other-tool-${process.pid}-keep.png`)
+    const sixHours = 7 * 60 * 60 * 1000
+    const longAgo = new Date(Date.now() - sixHours)
+
+    const { BrowserDriver } = await import('../src/browser/driver.ts')
+    const driver = new BrowserDriver({ executablePath: '/definitely/not/a/browser' })
+    const internals = driver as unknown as { pruneScreenshotFiles: () => Promise<void> }
+
+    writeFileSync(aged, 'x')
+    writeFileSync(fresh, 'x')
+    writeFileSync(survivor, 'x')
+    utimesSync(aged, longAgo, longAgo)
+    utimesSync(survivor, longAgo, longAgo)
+
+    try {
+      await internals.pruneScreenshotFiles()
+      expect(existsSync(aged), 'an aged screenshot of ours should be swept').toBe(false)
+      expect(existsSync(fresh), 'a screenshot inside the window must survive').toBe(true)
+      expect(existsSync(survivor), "another tool's file must never be touched").toBe(true)
+    } finally {
+      for (const path of [aged, fresh, survivor]) rmSync(path, { force: true })
+    }
+  })
+})
+
 describe('host: destroyed tabs are dropped from the tracked strip', () => {
   // The bug: `refreshTargets` only ever ADDED targets. A tab closed by the user
   // was re-adopted from a stale `Target.getTargets` as a new record with the

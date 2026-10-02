@@ -213,7 +213,38 @@ const translated = await driver.extractText({ maxChars: 4000 })
 check('the translation is on the page', translated.text.includes(TRANSLATION_TEXT), translated.text.slice(0, 60))
 check('the source text is on the page', translated.text.includes(SOURCE_TEXT), '')
 
-// --- 4. concurrent tool calls ----------------------------------------------
+// --- 5. the sidebar live view -----------------------------------------------
+
+// The sidebar does not embed the page; it shows a polled screenshot. That loop
+// is the one surface every user looks at first, so it is checked here rather
+// than only through the driver's capture calls.
+section('sidebar live view')
+const { ScreenshotStream } = await import('../src/browser/screenshot-stream.ts')
+await driver.open(contentUrl)
+const stream = new ScreenshotStream(driver, { intervalMs: 400, scale: 0.5, onError: () => {} })
+
+const first = await stream.poll()
+check('the first poll carries a frame', first.changed === true, JSON.stringify(first).slice(0, 80))
+const frame = first.changed === true ? first.frame : undefined
+check('the frame has real png data', typeof frame?.data === 'string' && frame.data.length > 1000, frame?.data?.length)
+check('the frame carries title and url', frame?.title === 'Agent Probe' && String(frame?.url).startsWith('http://127.0.0.1:'), `${frame?.title} ${frame?.url}`)
+check('the frame has an id and a timestamp', typeof frame?.id === 'number' && typeof frame?.capturedAt === 'string', '')
+
+const liveSecond = await stream.poll()
+check('an unchanged page is reported as unchanged', liveSecond.changed === false, JSON.stringify(liveSecond).slice(0, 80))
+check('the unchanged answer carries the last frame id', liveSecond.changed === false && liveSecond.frameId === frame?.id, '')
+
+// Change the page, and the stream must notice on the next poll.
+await driver.typeText('live-view-check', '#q')
+await driver.pressKey('Enter')
+await driver.click({ selector: '#go' })
+const liveThird = await stream.poll()
+check('a changed page produces a new frame', liveThird.changed === true && liveThird.frame.id !== frame?.id, liveThird.changed ? String(liveThird.frame.id) : 'unchanged')
+
+stream.dispose()
+check('the stream can be disposed while capturing', true, '')
+
+// --- 6. concurrent tool calls ----------------------------------------------
 
 // Every tool declares `isConcurrencySafe: () => true`, which is a promise that
 // the Host may run several at once. That promise is about the driver, so it is
