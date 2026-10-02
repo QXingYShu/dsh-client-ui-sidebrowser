@@ -8,8 +8,13 @@
 # GUI, where it contributes the right-sidebar browser tab and the text-selection
 # mini-popup.
 #
-# Install with:
+# Install with (two registrations, both required):
 #   dsh plugin --profile <name> add link:~/code/dsh-client-ui-sidebrowser
+#     -> writes `dependencies` only
+#   then add "@dsh-external/dsh-client-ui-sidebrowser" to the same profile's
+#   `dsh.profile.bundles` list by hand (or run scripts/install-local.ps1, which
+#   does both). The Host applies THIS file automatically from `dsh.bundle.patch`
+#   once the package is in `bundles` — never hand-write an insert row for it.
 - insert:
     - id: ui-sidebrowser
       name: '@dsh-external/dsh-client-ui-sidebrowser'

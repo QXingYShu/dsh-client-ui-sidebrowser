@@ -23,3 +23,10 @@ Thumbs.db
 # this developer's own `~/.dsh` profile, including absolute paths, so it must not
 # be published with the plugin.
 INSTALL-LOCAL.md
+
+# Throwaway audit probes: scripts written during development to drive the real
+# CDP client, the built bundles and the app.asar. They are not part of the
+# shipped plugin and reference machine-specific paths.
+.probe/
+.probe-client/
+.probe-spec/

@@ -53,39 +53,66 @@
 
 ## 安装
 
-### 用 bundle add 安装（推荐）
+### 第一步：把包登记进 profile（两个列表都要写）
+
+`dsh plugin add` 只是转发给 pnpm，因此**只写 profile 的 `dependencies`**。
+还差第二处登记：包名还必须出现在 profile 的 `dsh.profile.bundles` 列表里。
+两处都在 `~/.dsh/profiles/<profile>/package.json`：
+
+```jsonc
+{
+  "dependencies": {
+    "dsh-sidebrowser": "link:<path-to-this-repo>"   // ← 决定 pnpm 链接哪个目录
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@dsh-external/dsh-client-ui-sidebrowser"   // ← 决定 Host 激活哪个包
+      ]
+    }
+  }
+}
+```
+
+两种写法任选：
 
 ```bash
+# CLI：只写 dependencies —— bundles 需要你手工补一行
 dsh plugin --profile <profile> add link:<path-to-this-repo>
+
+# 或用仓库自带脚本：两处都写，并同步构建产物
+pwsh -File scripts/install-local.ps1
 ```
 
 - `<profile>` 是你的 dsh profile 名，通常是 `desktop` 或 `web`；
 - 仓库发布到 GitHub 之后，也可以直接用 git URL 安装：`dsh plugin --profile desktop add git+https://github.com/<owner>/dsh-sidebrowser.git`。
+  本包有 `prepare` 脚本，安装时会自动构建 `lib/` —— 但 pnpm 默认可能拦截
+  生命周期脚本并提示你批准（`pnpm approve-builds`）；如果装完 `lib/` 是空的，
+  插件激活会直接报错。
 
-**装完必须重启 DSH。** Host 半边（Chrome driver、控制路由、`browser_*` 工具）跑在 Host 进程里，插件进入 profile 的 `node_modules` 后需要重启 Host 才会被认领；只刷新 Web GUI 页面是不够的。
+**不需要手改 `cordis.patch.yml` —— 也请不要自己加 insert 行。** Host 会读
+`dsh.profile.bundles`，解析每个 bundle 的 `dsh.bundle.patch`（本包就是
+`cordis.patch.yml`），自动把 `insert:` 行并进插件表。插件表按 id 索引：手写一个
+**与包自带 id 不同**的行，会让同一个包被**加载两遍**（两套 agent 工具、两个客户端
+工厂、两个 Chrome driver）。
+
+**装完必须重启 DSH。** Host 半边（Chrome driver、控制路由、`browser_*` 工具）跑在 Host 进程里，插件进入 profile 的 `node_modules` 后需要重启 Host 才会被认领。之后**刷新一次 Web GUI 页面**让客户端半边重新加载——只刷新页面是不够的，但少了它右侧栏也不更新。
 
 ### 手动安装（等价做法，开发者实际使用的流程）
 
-1. **先构建**：`pnpm install && pnpm build`，产物是 `lib/index.js`（Host 半边，ESM）和 `lib/client.js`（客户端半边，被 Web GUI 的模块加载器包装过的 CJS）；
+1. **先构建**：`pnpm install && pnpm build`，产物是 `lib/index.js`（Host 半边，ESM）和 `lib/client.js`（客户端半边，一个**惰性 CJS 工厂**：下发的文件只调用 `window.__ModuleLoader__.load({ id, factory })`，所有模块体——包括 CSS 注入——都在加载器 materialize 这个工厂时才执行）；
 2. 把**构建后的整个包目录**复制到 profile 的 `node_modules/@dsh-external/dsh-client-ui-sidebrowser/`：
 
    ```
    ~/.dsh/profiles/<profile>/node_modules/@dsh-external/dsh-client-ui-sidebrowser/
    ```
 
-   注意是带 `@dsh-external/` 这个作用域目录的完整包（要有 `package.json`、`lib/`、`cordis.patch.yml`、`icon.svg`），不是仓库根目录；
+   注意是带 `@dsh-external/` 这个作用域目录的完整包（要有 `package.json`、`lib/`、`cordis.patch.yml`、`icon.svg`），不是仓库根目录（在本仓库里跑 `pnpm install` 会把它做成 `link:` junction，也就不用复制了）；
 3. **确认 `ws` 能被解析。** Host 半边唯一的运行时依赖就是 `ws`。多数 profile 本身就带着它；本仓库的 `node_modules` 里有也可。若解析不到，在该包目录下补一个 `node_modules/ws`，或把它装进 profile。
-4. 在 profile 的 bundle patch 里加上 `cordis.patch.yml` 那一行：
-
-```yaml
-- insert:
-    - id: ui-sidebrowser
-      name: '@dsh-external/dsh-client-ui-sidebrowser'
-```
-
+4. **按第一步把两个列表都登记好**（`dependencies` + `dsh.profile.bundles`）。插件行本身由包自带的 `cordis.patch.yml` 自动并入；如果哪天要覆盖它的配置（禁用、改字段），把覆盖写进 **profile 自己的** `cordis.patch.yml`，并且保持同一个 id（`ui-sidebrowser`）——id 是插件表的键。
 5. **重启 DSH。这一步是必须的。** Chrome driver、控制路由和 `browser_*` 工具都跑在 **Host 进程**里——把包复制进 `node_modules` 并不会让正在运行的 Host 认领新插件。只刷新 Web GUI 页面是不够的。
 
-这正是本仓库 `cordis.patch.yml` 的内容。插件是「双面」的：node 侧（exports `.`）在 Host 进程里跑浏览器 driver、控制路由和 `browser_*` 工具；`package.json` 里的 `dsh.client` 声明让客户端侧（exports `./client`）在 Web GUI 里加载，贡献右侧栏 tab 和选区小框。
+插件是「双面」的：node 侧（exports `.`）在 Host 进程里跑浏览器 driver、控制路由和 `browser_*` 工具；`package.json` 里的 `dsh.client` 声明让客户端侧（exports `./client`）在 Web GUI 里加载，贡献右侧栏 tab 和选区小框。
 
 ### 依赖
 
@@ -140,7 +167,9 @@ dsh plugin --profile <profile> add link:<path-to-this-repo>
 
 ## 配置
 
-设置卡片绑的是**本插件自己在 profile 里的那一行**（entry id `ui-sidebrowser`，回退到 `sidebrowser` 命名空间），并通过 dsh 的配置表单写入——**不是**存在浏览器 localStorage 里的。这样设置跟着 profile 走，换机器也在；同一个值（目标语言、翻译引擎）也就能同时被 DeepSeek 网页版桥接和翻译站路径读到。
+设置存在**本插件自己在 profile 里的那一行**（entry id `ui-sidebrowser`）——是 Host 侧配置，**不是**存在浏览器 localStorage 里的。这样设置跟着 profile 走，换机器也在；同一个值（目标语言、翻译引擎）也就能同时被 DeepSeek 网页版桥接和翻译站路径读到。
+
+插件还会把一张**设置卡片**注册进 `settings.section` 座位。已发布的 DSH 包（截至 `dsh-client-ui-*` 0.2.0-rc.2）都**不声明**这个座位，所以今天卡片不会渲染——目前请通过 profile 的 `cordis.patch.yml` 改配置（见下）。这个注册是安全的贡献：哪天某个 Host 声明了该座位，卡片无需改代码就会出现。
 
 卡片是「暂存—保存」式的：你输入的内容先留在草稿里，点「保存」才作为一次带版本校验的原子写入提交。输入过程中不会逐字落盘。
 
@@ -209,7 +238,7 @@ Host 侧的 `Config`（`src/index.ts` 里的 schema）是这些字段的唯一�
 **建议**
 
 - 不要用它在打开着敏感数据的页面上跑 agent，除非你确认过那个模型会做什么。
-- 想分层收紧权限时：`agentTools: false` 保留侧边栏但不给模型浏览器能力；`selectionPopup: false` 关掉选区小框；`enabled: false` 整个关掉。彻底移除则用 `dsh plugin --profile <profile> remove` 卸载插件。
+- 想分层收紧权限时：`agentTools: false` 保留侧边栏但不给模型浏览器能力；`selectionPopup: false` 关掉选区小框；`enabled: false` 整个关掉。彻底移除则用 `dsh plugin --profile <profile> remove` 卸载插件——注意它**只删 `dependencies` 条目**，`dsh.profile.bundles` 里的列表项需要手工删掉，否则 Host 还会在下次启动时尝试加载这个已经不存在的包。
 - 定期检查你的 DeepSeek 网页版对话历史——「AI 解释」走的是真实对话，会留下记录。
 
 ---

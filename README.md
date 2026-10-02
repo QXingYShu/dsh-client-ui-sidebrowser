@@ -53,39 +53,70 @@ If all you need is ordinary web browsing, the built-in tab may already be enough
 
 ## Installation
 
-### Install as a bundle (recommended)
+### Step 1: register the package (both lists)
+
+`dsh plugin add` forwards to pnpm and writes **only the profile's `dependencies`**.
+A second registration is required: the package name must also appear in the
+profile's `dsh.profile.bundles` list. Both live in
+`~/.dsh/profiles/<profile>/package.json`:
+
+```jsonc
+{
+  "dependencies": {
+    "dsh-sidebrowser": "link:<path-to-this-repo>"   // ← how pnpm links the directory
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@dsh-external/dsh-client-ui-sidebrowser"   // ← which package the Host activates
+      ]
+    }
+  }
+}
+```
+
+You can set both up with either:
 
 ```bash
+# CLI: writes dependencies only — you must add the bundles entry by hand afterwards
 dsh plugin --profile <profile> add link:<path-to-this-repo>
+
+# or the repo script: writes both entries and syncs the build output
+pwsh -File scripts/install-local.ps1
 ```
 
 - `<profile>` is your dsh profile name, usually `desktop` or `web`;
-- once the repository is published, a git URL works too: `dsh plugin --profile desktop add git+https://github.com/<owner>/dsh-sidebrowser.git`.
+- once the repository is published, a git URL works too:
+  `dsh plugin --profile desktop add git+https://github.com/<owner>/dsh-sidebrowser.git`.
+  The package has a `prepare` script, so the bundles are built automatically on
+  install — but pnpm may block lifecycle scripts by default and prompt you to
+  approve them (`pnpm approve-builds`); if `lib/` ends up empty, activation
+  fails loudly.
 
-**A DSH restart is required afterwards.** The Host half — Chrome driver, control routes and the `browser_*` tools — runs in the Host process, and a package that has landed in the profile's `node_modules` is only claimed when that process restarts. Refreshing the Web GUI page is not enough.
+**No manual `cordis.patch.yml` edit is needed — do not add an insert row
+yourself.** The Host reads `dsh.profile.bundles`, resolves each bundle's
+`dsh.bundle.patch` (this package's `cordis.patch.yml`) and applies its
+`insert:` rows automatically. The plugin table is keyed by id: a hand-written row
+with a *different* id than the package's own would load the package **twice**
+(two sets of agent tools, two client factories, two Chrome drivers).
+
+**A DSH restart is required afterwards.** The Host half — Chrome driver, control routes and the `browser_*` tools — runs in the Host process, and a package that has landed in the profile's `node_modules` is only claimed when that process restarts. Refreshing the Web GUI page is not enough; the page refresh only matters for the client half.
 
 ### Manual install (equivalent — the flow used in development)
 
-1. **Build first**: `pnpm install && pnpm build`, producing `lib/index.js` (the Host half, ESM) and `lib/client.js` (the client half, CommonJS wrapped for the Web GUI's module loader).
+1. **Build first**: `pnpm install && pnpm build`, producing `lib/index.js` (the Host half, ESM) and `lib/client.js` (the client half, a **lazy CommonJS factory** for the Web GUI's module loader: the served file only calls `window.__ModuleLoader__.load({ id, factory })`, and every module body — including the CSS injection — runs when the loader materializes the factory).
 2. Copy the **whole built package directory** into the profile's `node_modules/@dsh-external/dsh-client-ui-sidebrowser/`:
 
    ```
    ~/.dsh/profiles/<profile>/node_modules/@dsh-external/dsh-client-ui-sidebrowser/
    ```
 
-   That is the full package under its `@dsh-external/` scope directory — it must carry `package.json`, `lib/`, `cordis.patch.yml` and `icon.svg` — not the repository root.
+   That is the full package under its `@dsh-external/` scope directory — it must carry `package.json`, `lib/`, `cordis.patch.yml` and `icon.svg` — not the repository root. (`pnpm install` in the repo creates this as a `link:` junction instead, which needs no copying.)
 3. **Make sure `ws` resolves.** It is the Host half's only runtime dependency. Most profiles already carry it, as does this repository's own `node_modules`. If it does not resolve, add `node_modules/ws` inside the package directory or install it into the profile.
-4. Add the `cordis.patch.yml` row to the profile's bundle patch:
-
-```yaml
-- insert:
-    - id: ui-sidebrowser
-      name: '@dsh-external/dsh-client-ui-sidebrowser'
-```
-
+4. **Register both lists** exactly as in step 1 above (`dependencies` + `dsh.profile.bundles`). The plugin row itself comes from the package's own `cordis.patch.yml` automatically; if you ever need to override its config (disable it, change a field), write that override into the **profile's own** `cordis.patch.yml` — keeping the same id (`ui-sidebrowser`), since ids are the table's keys.
 5. **Restart DSH. This step is not optional.** The Chrome driver, the control routes and the `browser_*` tools all live in the **Host process**; copying the package into `node_modules` does not make a running Host claim it. Refreshing the browser tab is not a substitute.
 
-That is exactly the content of this repository's `cordis.patch.yml`. The package is dual-faced: the node half (exports `.`) runs in the Host process — browser driver, control routes and the `browser_*` tools — while the `dsh.client` declaration in `package.json` makes the browser half (exports `./client`) load in the Web GUI, where it contributes the right-sidebar tab and the selection popup.
+The package is dual-faced: the node half (exports `.`) runs in the Host process — browser driver, control routes and the `browser_*` tools — while the `dsh.client` declaration in `package.json` makes the browser half (exports `./client`) load in the Web GUI, where it contributes the right-sidebar tab and the selection popup.
 
 ### Requirements
 
@@ -140,7 +171,9 @@ The popup is defensive by construction: no browser attached, signed out, compose
 
 ## Configuration
 
-The settings card binds to **this plugin's own row in the profile** (entry id `ui-sidebrowser`, falling back to the `sidebrowser` namespace) and writes through dsh's configuration form. It is **not** browser localStorage: settings follow the profile to another machine, and one value — the target language, the translation engine — is therefore read by both the DeepSeek-web bridge and the translation-site path.
+Settings live in **this plugin's own row in the profile** (entry id `ui-sidebrowser`) — Host-side config, not browser localStorage: settings follow the profile to another machine, and one value — the target language, the translation engine — is therefore read by both the DeepSeek-web bridge and the translation-site path.
+
+The plugin also registers a **settings card** into a `settings.section` seat. No shipped DSH package (as of `dsh-client-ui-*` 0.2.0-rc.2) declares that seat, so today the card does not render — configure the row through the profile's `cordis.patch.yml` (see below). The registration is a safe contribution: the moment a Host declares the seat, the card appears without any code change.
 
 The card is staged: what you type stays in a draft until you press **Save**, which commits everything as one revision-fenced atomic mutation. Nothing lands in the settings document keystroke by keystroke.
 
@@ -209,7 +242,7 @@ Please read this section properly. The capabilities here are strong, and so is t
 **Suggestions**
 
 - Do not run an agent against a page holding sensitive data unless you are confident in what that model will do.
-- To tighten access in layers: `agentTools: false` keeps the sidebar but denies the model browser control; `selectionPopup: false` turns off the selection box; `enabled: false` turns everything off. To remove the plugin entirely: `dsh plugin --profile <profile> remove`.
+- To tighten access in layers: `agentTools: false` keeps the sidebar but denies the model browser control; `selectionPopup: false` turns off the selection box; `enabled: false` turns everything off. To remove the plugin entirely: `dsh plugin --profile <profile> remove` — note it deletes **only the `dependencies` entry**; remove the package name from `dsh.profile.bundles` by hand as well, or the Host will try to load a package that is no longer there on the next start.
 - Check your DeepSeek web conversation history now and then — "AI explain" uses the real conversation and leaves a record there.
 
 ---
