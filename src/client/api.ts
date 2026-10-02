@@ -434,12 +434,19 @@ export class SideBrowserApi {
    * frequent poll cheap. A caller must therefore paint only on
    * `changed: true` and keep the last frame otherwise — repainting on every
    * poll would decode the same PNG twice a second for nothing.
+   *
+   * `have` is the frame id this client already holds. Without it, a client that
+   * mounts after the Host has already captured a frame polls once, is told
+   * "unchanged" about a frame it has never seen, and its panel stays blank for
+   * as long as the page does not change.
+   *
+   * @param have - the newest frame id this client already holds.
    * @returns either a new frame, or proof the view is unchanged.
    */
-  async frame(): Promise<SideBrowserResult<
+  async frame(have = 0): Promise<SideBrowserResult<
     { changed: true; frame: HostBrowserFrame } | { changed: false; frameId: number; capturedAt: string }
   >> {
-    const result = await this.call<Record<string, unknown>>('/frame', { timeoutMs: 25_000 })
+    const result = await this.call<Record<string, unknown>>(`/frame${have > 0 ? `?have=${have}` : ''}`, { timeoutMs: 25_000 })
     if (!result.ok) return result
     const raw = result.value
     if (SideBrowserApi.bool(raw.changed)) {

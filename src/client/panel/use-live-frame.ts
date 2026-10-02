@@ -111,7 +111,11 @@ export function useLiveFrame(
       inFlight.current = true
       setPolling(true)
       try {
-        const result = await api.frame()
+        // Tell the Host which frame this client already holds. Without it a
+        // client that mounts after the Host's first capture is told "unchanged"
+        // about a frame it has never seen, and the panel stays blank until the
+        // page changes for some other reason.
+        const result = await api.frame(frameIdRef.current)
         if (cancelled || !aliveRef.current) return
         if (!result.ok) {
           setError(result.error)

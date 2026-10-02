@@ -56,10 +56,15 @@ async function call(
   path: string,
   request: Record<string, unknown>,
 ): Promise<ReturnType<typeof makeResponse>['recorded']> {
-  const route = routes.get(path)
-  if (route === undefined) throw new Error(`no route at ${path}`)
+  // Routes are keyed by path; a query string belongs on the request url.
+  const queryAt = path.indexOf('?')
+  const bare = queryAt < 0 ? path : path.slice(0, queryAt)
+  const route = routes.get(bare)
+  if (route === undefined) throw new Error(`no route at ${bare}`)
   const res = makeResponse()
-  await route.handler(request as never, res as never)
+  // The stub request carries its own placeholder url; ours must win, because the
+  // query string is what the frame handshake reads.
+  await route.handler({ ...request, url: path } as never, res as never)
   await settle()
   return res.recorded
 }
@@ -154,6 +159,47 @@ describe('route table', () => {
     const recorded = await call(routes, `${SIDEBROWSER_API_PREFIX}/config`, sameOrigin({ method: 'GET' }))
     expect(recorded.status).toBe(200)
     expect(recorded.body).toMatchObject({ ok: true, config: {} })
+  })
+
+  it('gives a late-mounting client the frame it is missing', async () => {
+    // Reported as a permanently blank sidebar. The Host had already captured,
+    // so every poll said "unchanged" about a frame the client had never seen and
+    // the panel stayed empty until the page changed for some other reason.
+    const frame = { id: 7, data: 'AAAA', title: 'Static page', url: 'https://example.com/', capturedAt: '2026-01-01T00:00:00.000Z' }
+    const driver = makeDriverStub().driver
+    const stream = {
+      poll: async () => ({ changed: false, frameId: 7, capturedAt: frame.capturedAt, title: frame.title, url: frame.url }),
+      latest: () => frame,
+      start: () => undefined,
+      stop: () => undefined,
+      dispose: () => undefined,
+    } as unknown as ScreenshotStream
+    const routes = new Map(makeSidebrowserRoutes(driver, stream).map(route => [route.path, route]))
+
+    // A client that holds nothing gets the pixels...
+    const late = await call(routes, `${SIDEBROWSER_API_PREFIX}/frame?have=0`, sameOrigin({ method: 'GET' }))
+    expect(late.body).toMatchObject({ ok: true, changed: true, frameId: 7 })
+    // ...and one that already holds that frame is not re-sent it.
+    const knowing = await call(routes, `${SIDEBROWSER_API_PREFIX}/frame?have=7`, sameOrigin({ method: 'GET' }))
+    expect(knowing.body).toMatchObject({ ok: true, changed: false, frameId: 7 })
+  })
+
+  it('carries the page metadata on the changed branch too', async () => {
+    // The client derives the address bar and tab title from the poll, so a
+    // changed frame arriving without url/title leaves the two disagreeing — and
+    // a caller reading only this response sees no url at all.
+    const frame = { id: 7, data: 'AAAA', title: 'Example', url: 'https://example.com/', capturedAt: '2026-01-01T00:00:00.000Z' }
+    const routes = makeRoutes(makeDriverStub().driver, async () => ({ changed: true, frame }))
+    const recorded = await call(routes, `${SIDEBROWSER_API_PREFIX}/frame`, sameOrigin({ method: 'GET' }))
+    expect(recorded.status).toBe(200)
+    expect(recorded.body).toMatchObject({
+      ok: true,
+      changed: true,
+      frameId: 7,
+      title: 'Example',
+      url: 'https://example.com/',
+    })
+    expect((recorded.body as { frame?: { data?: string } }).frame?.data).toBe('AAAA')
   })
 
   it('registers every documented endpoint under one prefix', () => {

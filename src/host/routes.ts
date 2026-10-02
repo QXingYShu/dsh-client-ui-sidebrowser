@@ -179,6 +179,18 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(text)
 }
 
+/** Read one finite numeric query parameter, or undefined when absent or unusable. */
+function readQueryNumber(req: IncomingMessage, key: string): number | undefined {
+  const raw = req.url
+  if (typeof raw !== 'string') return undefined
+  const query = raw.indexOf('?')
+  if (query < 0) return undefined
+  const value = new URLSearchParams(raw.slice(query + 1)).get(key)
+  if (value === null) return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
 /** Narrow a value to a JSON object, or undefined when it is not one. */
 function asJsonObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined
@@ -427,7 +439,8 @@ export function makeSidebrowserRoutes(
    * detected: an unchanged page answers with metadata and no payload, which is
    * what makes a 1 Hz poll affordable.
    */
-  const frame = get('frame', async () => {
+  const frame = get('frame', async (req: IncomingMessage) => {
+    const have = readQueryNumber(req, 'have')
     let poll: Awaited<ReturnType<ScreenshotStream['poll']>>
     try {
       poll = await stream.poll()
@@ -449,9 +462,30 @@ export function makeSidebrowserRoutes(
       throw error
     }
     if (!poll.changed) {
+      // The client may have mounted after the stream already captured a frame,
+      // in which case it has never seen one and its panel stays blank until the
+      // page happens to change. `?have=` lets the client say which frame it
+      // already holds, and this branch answers with the pixels whenever the
+      // Host's latest is a different one.
+      const latest = stream.latest()
+      if (latest !== undefined && latest.id !== have) {
+        return { ok: true, changed: true, frame: latest, frameId: latest.id, capturedAt: latest.capturedAt, title: latest.title, url: latest.url }
+      }
       return { ok: true, changed: false, frameId: poll.frameId, capturedAt: poll.capturedAt, title: poll.title, url: poll.url }
     }
-    return { ok: true, changed: true, frame: poll.frame }
+    // The metadata travels with the changed frame too. The client derives the
+    // address bar and tab title from `/state`, which is a separate poll, so
+    // omitting them here meant the two could disagree for a whole interval - and
+    // a caller reading only this response saw no url or title at all.
+    return {
+      ok: true,
+      changed: true,
+      frame: poll.frame,
+      frameId: poll.frame.id,
+      capturedAt: poll.frame.capturedAt,
+      title: poll.frame.title,
+      url: poll.frame.url,
+    }
   })
 
   const text = post('text', async body => {

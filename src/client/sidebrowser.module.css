@@ -147,10 +147,17 @@
 
 .frame {
   display: block;
-  max-width: 100%;
-  max-height: 100%;
+  /* Fill the box and letterbox inside it, rather than clamping with
+     `max-width/max-height: 100%`. A percentage max-height is resolved against
+     the parent's height, and this panel's height chain is itself percentages -
+     when it is not definite the max silently stops applying and the frame
+     renders at its natural size, clipped, which is what "the aspect ratio does
+     not adjust" looked like. Width/height plus `object-fit` needs no such
+     chain and always keeps the page's proportions. */
+  width: 100%;
+  height: 100%;
   object-fit: contain;
-  /* The frame is a JPEG of a desktop window; letting the browser smooth it
+  /* The frame is a screenshot of a real window; letting the browser smooth it
      down makes small text legible instead of merely present. */
   image-rendering: auto;
   user-select: none;
