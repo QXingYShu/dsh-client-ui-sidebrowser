@@ -12,7 +12,8 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "dsh": {
     "bundle": {
@@ -64,6 +65,7 @@
     "lib/**/*.js",
     "lib/**/*.js.map",
     "lib/**/*.css",
+    "locale/*.json",
     "src",
     "scripts",
     "cordis.patch.yml",

@@ -219,6 +219,17 @@ for (const bundle of bundles) {
 3. **插件行**：由插件**自带的** `cordis.patch.yml` 经 `dsh.bundle.patch` 提供，
    **不需要手工往 `~/.dsh/cordis.patch.yml` 里再写一遍**。
 
+> **官方首选路径**（见 `cordis-plugin-development/SKILL.md`）：上述三件事应当通过
+> agent 工具 `plugin_manager` 的 `action: install_bundle`（`target` = 包目录绝对路径）
+> 一步完成 —— 它**同时**写 `dependencies`、`bundles` 并触发 HMR 激活，因此
+> **新装 bundle 常常无需重启 Host**（"Installing a new bundle can activate through
+> HMR"）。技能明确禁止手写 profile 的 `package.json` / `cordis.patch.yml`。
+> 手写（本仓库早期采用的路线）能到达同样的状态，但**不会**触发 HMR ——
+> 仍需重启 Host 让插件表重新组合；且直接改文件绕开了 `install_bundle`
+> 返回的 `application` / `warnings` 结果，无从判断激活是否成功。
+> 替换一个**已安装**包的新版本则无论如何都需要重启（"replacing an installed
+> package requires restart to load a fresh JavaScript module generation"）。
+
 真实样例（`~/.dsh/profiles/desktop/package.json`）：
 
 ```json

@@ -132,6 +132,14 @@ function Sync-Artifacts {
     $src = Join-Path $repo $f
     if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $nm $f) -Force }
   }
+  # Display metadata (Plugin Manager card title/description) lives here; the
+  # Host reads it through exports["./locale/*.json"] without activating us.
+  $locales = Join-Path $repo 'locale'
+  if (Test-Path -LiteralPath $locales) {
+    $localeDest = Join-Path $nm 'locale'
+    New-Item -ItemType Directory -Force -Path $localeDest | Out-Null
+    Copy-Item -Path (Join-Path $locales '*') -Destination $localeDest -Recurse -Force
+  }
   Write-Host "    lib/ + metadata copied to $nm"
 }
 
