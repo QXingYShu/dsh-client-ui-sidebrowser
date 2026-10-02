@@ -143,9 +143,12 @@ interface SlotRegistry {
 /**
  * Read one service, tolerating its absence.
  *
- * A cordis context throws from `get` for a service this fiber never injected,
- * which is the "this deployment does not ship that plugin" case rather than a
- * real failure — so every read here is guarded and the plugin degrades.
+ * An absent service is the "this deployment does not ship that plugin" case
+ * rather than a failure, so every read here is guarded and the plugin degrades.
+ * Cordis returns `undefined` for an unserved service (verified against
+ * @deepseek-ai/cordis 4.0.4) rather than throwing, but a client context can also
+ * be a plain object without `get` at all, and a throwing stub must not take the
+ * whole apply down — hence the shape check and the catch together.
  * @param ctx - the client context.
  * @param name - the service name.
  * @returns the service, or undefined when it is absent.

@@ -349,14 +349,24 @@ describe('selection detection', () => {
 
   it('refuses a selection inside the right sidebar column', () => {
     // The right sidebar is where this plugin's own panel lives; explaining text
-    // the user is reading there would be self-referential.
-    mount('<div data-sidebar-right><p id="side">sidebar copy</p></div>')
+    // the user is reading there would be self-referential. The attribute is the
+    // one the shipped shell actually emits — an earlier version of this test
+    // used `data-sidebar-right`, which no package sets, so it passed while the
+    // exclusion never really ran.
+    mount('<div data-sidebar-right-session><p id="side">sidebar copy</p></div>')
     expect(detectSelection(selectText(document.getElementById('side') as HTMLElement))).toBeUndefined()
   })
 
+  it('refuses a selection inside a dockkit pane or a dialog', () => {
+    mount('<div data-dockkit-pane><p id="pane">pane copy</p></div>')
+    expect(detectSelection(selectText(document.getElementById('pane') as HTMLElement))).toBeUndefined()
+    mount('<div role="dialog"><p id="dlg">dialog copy</p></div>')
+    expect(detectSelection(selectText(document.getElementById('dlg') as HTMLElement))).toBeUndefined()
+  })
+
   it('accepts unmarked body text, so an unfamiliar shell still gets the popup', () => {
-    // A deployment whose markup lacks `data-conversation` would otherwise
-    // produce a popup nowhere; being slightly over-eager is the safer default.
+    // No shipped package marks the conversation column, so the inclusion side is
+    // permissive on purpose: being slightly over-eager beats never appearing.
     mount('<p id="plain">a plain paragraph</p>')
     expect(detectSelection(selectText(document.getElementById('plain') as HTMLElement))?.text).toBe('a plain paragraph')
   })

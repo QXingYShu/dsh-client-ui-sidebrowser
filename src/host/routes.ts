@@ -165,7 +165,13 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   for await (const chunk of req) {
     const buffer = chunk as Buffer
     size += buffer.length
-    if (size > BODY_LIMIT) throw new Error('body-too-large')
+    if (size > BODY_LIMIT) {
+      // Stop reading but let the socket drain: abandoning a half-read request
+      // leaves the connection unusable, so the client sees a reset rather than
+      // the 413 this is about.
+      req.destroy()
+      throw new Error('body-too-large')
+    }
     chunks.push(buffer)
   }
   const text = Buffer.concat(chunks).toString('utf8')

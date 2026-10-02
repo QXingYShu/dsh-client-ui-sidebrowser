@@ -84,14 +84,15 @@ export function useLiveFrame(
   const [error, setError] = useState<string | undefined>(undefined)
   const inFlight = useRef(false)
   const frameIdRef = useRef(0)
-  const forcedRef = useRef(false)
   const aliveRef = useRef(true)
+  // The live poll, handed out through a ref so `refresh` can trigger it without
+  // the interval being torn down and rebuilt (which would drop the cadence the
+  // user configured) and without `refresh` changing identity every render.
+  const pollNowRef = useRef<() => void>(() => {})
 
-  // A forced refresh is a one-shot, read and cleared by the poll loop rather
-  // than a dependency — restarting the interval on every reload click would
-  // drop the cadence the user configured.
+  // A forced refresh is a one-shot immediate poll, not a cadence change.
   const refresh = useCallback(() => {
-    forcedRef.current = true
+    pollNowRef.current()
   }, [])
 
   useEffect(() => {
@@ -106,7 +107,6 @@ export function useLiveFrame(
     let cancelled = false
 
     const poll = async (): Promise<void> => {
-      forcedRef.current = false
       if (inFlight.current) return
       inFlight.current = true
       setPolling(true)
@@ -134,11 +134,15 @@ export function useLiveFrame(
       }
     }
 
+    // Hand the immediate-poll entry point to `refresh`, and disarm it on cleanup
+    // so a refresh that arrives after unmount cannot poll a torn-down view.
+    pollNowRef.current = () => { void poll() }
     void poll()
     const handle = setInterval(() => { void poll() }, pollMs)
     return () => {
       cancelled = true
       clearInterval(handle)
+      pollNowRef.current = () => {}
     }
   }, [api, pollMs, active])
 

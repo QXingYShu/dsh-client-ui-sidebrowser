@@ -65,25 +65,36 @@ function isOwnSurface(node: Element | null): boolean {
 }
 
 /**
+ * Attributes that positively place an element OUTSIDE the conversation.
+ *
+ * Every one of these is emitted by a shipped package (`dsh-client-ui-sidebar`
+ * and `dsh-client-ui-sidebar-right`, dsh-client-ui-* 0.2.0-rc.2). Note what is
+ * deliberately absent: no shipped package marks the conversation column with a
+ * stable attribute — `data-conversation` exists in no package at all — so the
+ * inclusion side cannot be decided precisely and is left permissive.
+ */
+const OUTSIDE_CONVERSATION = [
+  '[data-sidebar-right-session]',
+  '[data-sidebar-right-panel]',
+  '[data-sidebar-right-tab]',
+  '[data-dockkit-pane]',
+  '[data-dockkit-tab]',
+  '[role="dialog"]',
+].join(', ')
+
+/**
  * Whether an element sits inside the conversation column.
  *
- * The shell marks the conversation with `data-conversation` (its turn,
- * transcript and message roots all carry it). A deployment whose markup lacks
- * the attribute would produce a popup nowhere, which is worse than a slightly
- * over-eager one — so an element that is inside the document but carries no
- * conversation marker anywhere is accepted, and only elements that are
- * positively outside the conversation (a sidebar, a panel, a dialog) are
- * rejected.
+ * The exclusion side is precise and the inclusion side is permissive on
+ * purpose: a popup that opens once too often is a nuisance, whereas a branch
+ * keyed on an attribute the shell does not set would either never fire (so the
+ * exclusion below would never run) or, worse, silently disable the feature.
  * @param node - the selection's anchor element.
  * @returns whether the popup may open for it.
  */
 function isInConversation(node: Element): boolean {
   if (isOwnSurface(node)) return false
-  // Positively inside the conversation: the common case, decided precisely.
-  if (node.closest('[data-conversation]') !== null) return true
-  // Positively outside: any known non-conversation column.
-  if (node.closest('[data-sidebar], [data-sidebar-right], [role="dialog"], [data-dsh-panel]') !== null) return false
-  return true
+  return node.closest(OUTSIDE_CONVERSATION) === null
 }
 
 /**

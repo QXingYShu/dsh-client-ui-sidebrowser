@@ -20,24 +20,51 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access, mkdir, writeFile, unlink } from 'node:fs/promises'
+import { access, mkdir, readdir, stat, writeFile, unlink } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CdpClient, CdpError } from './cdp-client.ts'
 
-/** Chrome/Edge executable locations probed in order when none is configured. */
+/**
+ * Chrome/Edge executable locations probed in order when none is configured.
+ *
+ * The fixed Windows entries cover machine-wide installs; the environment-driven
+ * ones cover per-user installs (`%LOCALAPPDATA%`), custom roots (a Program Files
+ * on another drive, a machine image that relocates it) and Linux installs that
+ * use the versioned `/opt/google/chrome` layout. Missing entries are skipped by
+ * the `access` probe, so listing a location that does not exist costs nothing.
+ */
 const BROWSER_CANDIDATES: readonly string[] = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+  // Per-user installs: the common case on a machine without admin rights.
+  ...['LOCALAPPDATA'].map(root => `${process.env[root] ?? ''}\\Google\\Chrome\\Application\\chrome.exe`),
+  ...['LOCALAPPDATA'].map(root => `${process.env[root] ?? ''}\\Microsoft\\Edge\\Application\\msedge.exe`),
+  // Non-standard roots on Windows.
+  ...['PROGRAMFILES', 'PROGRAMFILES(X86)'].flatMap(root => {
+    const base = process.env[root]
+    return base === undefined
+      ? []
+      : [`${base}\\Google\\Chrome\\Application\\chrome.exe`, `${base}\\Microsoft\\Edge\\Application\\msedge.exe`]
+  }),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  '/opt/google/chrome/chrome',
   '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
   '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
 ]
+
+/** Filename prefix marking a screenshot this plugin wrote. */
+const SCREENSHOT_PREFIX = 'dsh-sidebrowser-shot-'
+
+/** How long a written screenshot survives before a later capture prunes it. */
+const SCREENSHOT_RETENTION_MS = 6 * 60 * 60 * 1000
 
 /** Shortcuts the `browser_open` tool and the sidebar expose by name. */
 export const BROWSER_SHORTCUTS: Readonly<Record<string, string>> = {
@@ -763,8 +790,9 @@ export class BrowserDriver {
     const tab = await this.resolveTab(tabId)
     if (tab === undefined) throw new BrowserError('no-tab', 'there is no page open to navigate')
     const client = await this.requireClient()
-    const method = delta === -1 ? 'Page.getNavigationHistory' : 'Page.getNavigationHistory'
-    const history = await client.sendObject(method, {}, tab.sessionId)
+    // Back and forward are the same operation against the history index; the
+    // direction is `delta`, not a different command.
+    const history = await client.sendObject('Page.getNavigationHistory', {}, tab.sessionId)
     const entries = Array.isArray(history.entries) ? history.entries : []
     const index = typeof history.currentIndex === 'number' ? history.currentIndex : 0
     const target = index + delta
@@ -1223,10 +1251,43 @@ export class BrowserDriver {
    * @returns the absolute path of the written PNG.
    */
   async captureScreenshotToFile(tabId?: string, fullPage = false, scale = 1): Promise<string> {
+    // The file exists so the agent can open it in a later turn, so it cannot be
+    // deleted on return. Without a sweep the temp directory grows by one PNG per
+    // screenshot for the life of the machine; anything older than the retention
+    // window is past every plausible read, so it goes here.
+    await this.pruneScreenshotFiles()
     const data = await this.captureScreenshot(fullPage, tabId, scale)
-    const path = join(tmpdir(), `dsh-sidebrowser-shot-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`)
+    const path = join(tmpdir(), `${SCREENSHOT_PREFIX}${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`)
     await writeFile(path, Buffer.from(data, 'base64'))
     return path
+  }
+
+  /**
+   * Delete this plugin's screenshot files older than the retention window.
+   *
+   * Only files carrying this plugin's own prefix are considered, and only after
+   * their mtime; a failure here (locked file, temp dir in use) is ignored because
+   * housekeeping must never break a capture.
+   * @returns void; resolves even when nothing could be pruned.
+   */
+  private async pruneScreenshotFiles(): Promise<void> {
+    const cutoff = Date.now() - SCREENSHOT_RETENTION_MS
+    let entries: string[]
+    try {
+      entries = await readdir(tmpdir())
+    } catch {
+      return
+    }
+    for (const name of entries) {
+      if (!name.startsWith(SCREENSHOT_PREFIX) || !name.endsWith('.png')) continue
+      const path = join(tmpdir(), name)
+      try {
+        const info = await stat(path)
+        if (info.mtimeMs < cutoff) await unlink(path)
+      } catch {
+        // Vanished or unreadable between listing and stat; nothing to do.
+      }
+    }
   }
 
   /**
