@@ -238,6 +238,33 @@ export class BrowserDriver {
   private selectedTabId: string | undefined
 
   /**
+   * Bumped whenever the tab model changes locally (`open`, `closeTab`).
+   *
+   * `refreshTargets` reads a snapshot from the browser and applies it
+   * asynchronously; `adoptExistingTargets` is deliberately fire-and-forget. A
+   * snapshot taken BEFORE a concurrent open lands AFTER it, and without this
+   * guard its removal step deletes the freshly opened tab (it is absent from
+   * the stale list) and hands selection to whatever tab the stale list did
+   * contain. Every subsequent command then acts on the wrong page. A refresh
+   * that finds the epoch moved discards itself; the next refresh is
+   * authoritative.
+   */
+  private tabModelEpoch = 0
+
+  /**
+   * Creation order of every tracked tab, and the counter behind it.
+   *
+   * A `Target.getTargets` snapshot is a moment in the past by the time it is
+   * applied, so "this target is absent from it" only proves anything about tabs
+   * that already existed when the snapshot was taken. A refresh therefore
+   * refuses to remove a tab whose order is at or beyond its own start order —
+   * that tab was created concurrently, and its absence from the snapshot is
+   * arithmetic, not evidence that the user closed it.
+   */
+  private readonly tabCreationOrder = new Map<string, number>()
+  private nextCreationOrder = 0
+
+  /**
    * Remote object id of each tab's page global scope, keyed by CDP session id.
    *
    * `Runtime.callFunctionOn` addresses its callee by object id, so evaluations
@@ -312,6 +339,7 @@ export class BrowserDriver {
     const existing = await this.tryConnect(port)
     if (existing !== undefined) {
       this.client = existing
+      this.watchDestroyedTargets(existing)
       this.adoptExistingTargets()
       return
     }
@@ -337,6 +365,7 @@ export class BrowserDriver {
       throw new BrowserError('launch-failed', `Chrome started but its debugging port ${port} never accepted a CDP connection`)
     }
     this.client = client
+    this.watchDestroyedTargets(client)
     this.adoptExistingTargets()
   }
 
@@ -431,6 +460,43 @@ export class BrowserDriver {
   }
 
   /**
+   * Stop tracking one tab and release its session-scoped caches.
+   *
+   * Shared by the snapshot diff, `Target.targetDestroyed` and `closeTab` so no
+   * path can forget one of the three things that must go together: the tab row,
+   * its creation order, and the renderer-bound global handle.
+   * @param tabId - the tab to forget.
+   */
+  private dropTab(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    this.tabs.delete(tabId)
+    this.tabCreationOrder.delete(tabId)
+    if (tab !== undefined) this.globalObjectIds.delete(tab.sessionId)
+    if (this.selectedTabId === tabId) {
+      const next = this.tabs.keys().next()
+      this.selectedTabId = next.done ? undefined : next.value
+    }
+    this.syncSelectionFlag()
+  }
+
+  /**
+   * Drop tabs the browser destroys on its own, without waiting for a resync.
+   *
+   * The user closing a tab in the real Chrome window is the common case, and
+   * inferring it from "it is missing from the next snapshot" makes every
+   * command in between act on a dead target. Chrome tells us directly.
+   * @param client - the attached client to subscribe on.
+   */
+  private watchDestroyedTargets(client: CdpClient): void {
+    client.on('Target.targetDestroyed', event => {
+      const targetId = (event.params as { targetId?: unknown } | undefined)?.targetId
+      if (typeof targetId !== 'string') return
+      const tab = this.findByTargetId(targetId)
+      if (tab !== undefined) this.dropTab(tab.id)
+    })
+  }
+
+  /**
    * Refresh the tracked tab set from the browser's live targets.
    *
    * Chrome may close a tab behind the driver's back (the user closes the real
@@ -439,10 +505,17 @@ export class BrowserDriver {
    * @throws {BrowserError} when the browser is not attached.
    */
   private async refreshTargets(): Promise<void> {
+    const epoch = this.tabModelEpoch
+    // Anything created from here on is invisible to the snapshot below.
+    const startedOrder = this.nextCreationOrder
     const client = await this.requireClient()
     const result = await client.sendObject('Target.getTargets')
+    // A local change (open/close) happened while this snapshot was in flight;
+    // applying it would resurrect a just-closed tab or delete a just-opened one.
+    if (epoch !== this.tabModelEpoch) return
     const infos = Array.isArray(result.targetInfos) ? result.targetInfos : []
     const live = new Set<string>()
+    const added: string[] = []
     for (const raw of infos) {
       if (typeof raw !== 'object' || raw === null) continue
       const info = raw as { targetId?: string, type?: string, url?: string, title?: string }
@@ -458,6 +531,17 @@ export class BrowserDriver {
         title: typeof info.title === 'string' ? info.title : '',
         selected: false,
       })
+      added.push(id)
+      if (epoch !== this.tabModelEpoch) {
+        // A local change landed while the attaches were in flight: roll back
+        // this snapshot's additions and leave the authoritative work to the
+        // next refresh, which starts under the new epoch.
+        for (const rollback of added) {
+          this.tabs.delete(rollback)
+          this.tabCreationOrder.delete(rollback)
+        }
+        return
+      }
     }
     // Drop the tabs the browser has actually destroyed. Without this the strip
     // only ever grew: a closed tab was re-adopted from a stale `Target.getTargets`
@@ -465,12 +549,11 @@ export class BrowserDriver {
     // ghost tab and then watch a later command fail against a dead target.
     for (const [id, tab] of [...this.tabs]) {
       if (live.has(tab.targetId)) continue
-      this.tabs.delete(id)
-      this.globalObjectIds.delete(tab.sessionId)
-      // Clear the selection if it pointed at the removed tab; otherwise the id
-      // would dangle until some later resync noticed, and the selection block
-      // below cannot replace it (there is no next tab to pick).
-      if (this.selectedTabId === id) this.selectedTabId = undefined
+      // Created after this snapshot was taken: its absence proves nothing. An
+      // unknown order means the row predates this bookkeeping, so it is treated
+      // as the oldest possible tab and stays eligible for removal.
+      if ((this.tabCreationOrder.get(id) ?? -1) >= startedOrder) continue
+      this.dropTab(id)
     }
     if (this.selectedTabId === undefined || !this.tabs.has(this.selectedTabId)) {
       const first = this.tabs.keys().next()
@@ -511,7 +594,9 @@ export class BrowserDriver {
    * @returns a fresh tab id like `tab-1`.
    */
   private newTabId(): string {
-    return `tab-${this.nextTabSeq++}`
+    const id = `tab-${this.nextTabSeq++}`
+    this.tabCreationOrder.set(id, this.nextCreationOrder++)
+    return id
   }
 
   /**
@@ -589,6 +674,9 @@ export class BrowserDriver {
    * @throws {BrowserError} when the target is neither a valid URL nor a known shortcut.
    */
   async open(target: string): Promise<BrowserTabInfo> {
+    // Invalidate any in-flight snapshot before it is taken, so a refresh that
+    // predates this tab cannot delete it the moment its response lands.
+    this.tabModelEpoch++
     const url = resolveNavigationTarget(target)
     const client = await this.requireClient()
     const created = await client.sendObject('Target.createTarget', { url: 'about:blank' })
@@ -768,19 +856,12 @@ export class BrowserDriver {
    * @returns void; closing an unknown tab is a no-op guarded by resolveTab's error.
    */
   async closeTab(tabId: string): Promise<void> {
+    this.tabModelEpoch++
     const tab = await this.resolveTab(tabId)
     if (tab === undefined) return
     const client = await this.requireClient()
     await client.send('Target.closeTarget', { targetId: tab.targetId }).catch(() => undefined)
-    this.tabs.delete(tab.id)
-    // The cached global handle belongs to the destroyed renderer; keeping it
-    // would make a later evaluation of a reused session id fail confusingly.
-    this.globalObjectIds.delete(tab.sessionId)
-    if (this.selectedTabId === tab.id) {
-      const next = this.tabs.keys().next()
-      this.selectedTabId = next.done ? undefined : next.value
-    }
-    this.syncSelectionFlag()
+    this.dropTab(tab.id)
   }
 
   /**
@@ -1168,6 +1249,7 @@ export class BrowserDriver {
     if (this.disposed) return
     this.disposed = true
     this.tabs.clear()
+    this.tabCreationOrder.clear()
     this.selectedTabId = undefined
     this.client?.dispose()
     this.client = undefined

@@ -328,6 +328,121 @@ describe('host: CDP events carry the envelope sessionId', () => {
   })
 })
 
+describe('host: a stale target snapshot cannot delete a freshly opened tab', () => {
+  // The race, seen against real Chrome: `adoptExistingTargets` is
+  // fire-and-forget, so its `Target.getTargets` snapshot is taken BEFORE a
+  // concurrent `open()` but its response lands AFTER. The removal step then
+  // deletes the just-opened tab (absent from the stale list) and hands
+  // selection to whatever the stale list did contain — every later command
+  // acts on the wrong page (observed: clicks burning 5s timeouts against
+  // chrome://newtab, scroll timing out at 30s).
+  it('discards a refresh whose snapshot predates a concurrent open', async () => {
+    const { BrowserDriver } = await import('../src/browser/driver.ts')
+    const driver = new BrowserDriver({ executablePath: '/definitely/not/a/browser' })
+    const internals = driver as unknown as {
+      tabs: Map<string, { id: string, targetId: string, selected: boolean }>
+      selectedTabId: string | undefined
+      client: unknown
+      tabModelEpoch: number
+    }
+
+    let releaseTargets: ((value: unknown) => void) | undefined
+    const staleSnapshot = new Promise(resolve => { releaseTargets = resolve })
+    let getCalls = 0
+    const OLD = { targetId: 'T-OLD', type: 'page', url: 'about:old', title: 'old' }
+    const NEW = { targetId: 'T-NEW', type: 'page', url: 'https://example.com/', title: 'new' }
+    internals.client = {
+      isOpen: true,
+      sendObject: async (method: string): Promise<Record<string, unknown>> => {
+        if (method === 'Target.getTargets') {
+          getCalls += 1
+          // First call is the stale one: it blocks until `open()` has finished,
+          // then reports a world that predates the new tab.
+          if (getCalls === 1) return await staleSnapshot as Record<string, unknown>
+          return { targetInfos: [OLD, NEW] }
+        }
+        if (method === 'Target.createTarget') return { targetId: 'T-NEW' }
+        if (method === 'Target.attachToTarget') return { sessionId: `S-${Math.random().toString(16).slice(2)}` }
+        return {}
+      },
+      send: async (): Promise<Record<string, unknown>> => ({}),
+      // waitForLoad settles when the event carries no session id.
+      on: (_method: string, handler: (event: unknown) => void): (() => void) => {
+        const timer = setTimeout(() => handler({}), 1)
+        return () => clearTimeout(timer)
+      },
+      dispose: (): void => {},
+    }
+
+    // The refresh starts first and blocks on getTargets...
+    const listing = driver.listTabs()
+    // ...then the concurrent open creates a tab the stale snapshot never saw.
+    const opened = await driver.open('https://example.com/')
+    expect(internals.tabModelEpoch).toBeGreaterThan(0)
+
+    // Now the stale response lands.
+    releaseTargets?.({ targetInfos: [OLD] })
+    await listing
+
+    expect(internals.tabs.has(opened.id), 'the freshly opened tab was deleted by a stale snapshot').toBe(true)
+    expect(internals.tabs.get(opened.id)?.selected, 'selection was stolen by a stale snapshot').toBe(true)
+    expect(internals.selectedTabId).toBe(opened.id)
+    await driver.dispose()
+  })
+})
+
+describe('host: a tab the user closes is dropped the moment it is destroyed', () => {
+  // Inferring a close from "missing in the next snapshot" leaves every command
+  // in between acting on a dead target. Chrome says so directly, and the driver
+  // now listens instead of waiting for a resync.
+  it('drops the tab, its caches and the selection on targetDestroyed', async () => {
+    const { BrowserDriver } = await import('../src/browser/driver.ts')
+    const driver = new BrowserDriver({ executablePath: '/definitely/not/a/browser' })
+    const internals = driver as unknown as {
+      tabs: Map<string, { id: string, targetId: string, sessionId: string, selected: boolean }>
+      selectedTabId: string | undefined
+      globalObjectIds: Map<string, string>
+      client: unknown
+      watchDestroyedTargets: (client: unknown) => void
+    }
+
+    // Two tracked tabs so the selection has somewhere to fall back to.
+    internals.tabs.set('tab-1', { id: 'tab-1', targetId: 'T-1', sessionId: 'S-1', selected: true })
+    internals.tabs.set('tab-2', { id: 'tab-2', targetId: 'T-2', sessionId: 'S-2', selected: false })
+    internals.selectedTabId = 'tab-1'
+    internals.globalObjectIds.set('S-1', 'obj-1')
+
+    const handlers = new Map<string, (event: unknown) => void>()
+    internals.client = {
+      isOpen: true,
+      on: (method: string, handler: (event: unknown) => void): (() => void) => {
+        handlers.set(method, handler)
+        return () => handlers.delete(method)
+      },
+      sendObject: async (): Promise<Record<string, unknown>> => ({}),
+      send: async (): Promise<Record<string, unknown>> => ({}),
+      dispose: (): void => {},
+    }
+    internals.watchDestroyedTargets(internals.client)
+    expect(handlers.has('Target.targetDestroyed')).toBe(true)
+
+    handlers.get('Target.targetDestroyed')?.({ params: { targetId: 'T-1' } })
+
+    expect(internals.tabs.has('tab-1')).toBe(false)
+    expect(internals.globalObjectIds.has('S-1')).toBe(false)
+    // Selection moves to a surviving tab rather than dangling on a dead id.
+    expect(internals.selectedTabId).toBe('tab-2')
+    expect(internals.tabs.get('tab-2')?.selected).toBe(true)
+
+    // An unknown or malformed destroy event must not disturb anything.
+    handlers.get('Target.targetDestroyed')?.({ params: { targetId: 'T-NOPE' } })
+    handlers.get('Target.targetDestroyed')?.({ params: {} })
+    expect(internals.tabs.has('tab-2')).toBe(true)
+    expect(internals.selectedTabId).toBe('tab-2')
+    await driver.dispose()
+  })
+})
+
 describe('host: destroyed tabs are dropped from the tracked strip', () => {
   // The bug: `refreshTargets` only ever ADDED targets. A tab closed by the user
   // was re-adopted from a stale `Target.getTargets` as a new record with the
