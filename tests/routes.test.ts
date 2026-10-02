@@ -179,6 +179,7 @@ describe('route table', () => {
       `${SIDEBROWSER_API_PREFIX}/tabs/select`,
       `${SIDEBROWSER_API_PREFIX}/text`,
       `${SIDEBROWSER_API_PREFIX}/type`,
+      `${SIDEBROWSER_API_PREFIX}/window`,
     ])
   })
 

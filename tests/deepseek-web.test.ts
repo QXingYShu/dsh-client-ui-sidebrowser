@@ -175,7 +175,7 @@ describe('translateSelection', () => {
       timeoutMs: 60,
     })
     expect(navigate).toHaveBeenCalledOnce()
-    expect(String(navigate.mock.calls[0]![0])).toContain('fanyi.youdao.com')
+    expect(String(navigate.mock.calls[0]![0])).toContain('dict.youdao.com')
     expect(outcome).toMatchObject({ kind: 'opened', engine: engine.id })
   })
 

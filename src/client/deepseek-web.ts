@@ -100,6 +100,17 @@ export type BridgeStage = DeepSeekWebStage
 /** How many consecutive unchanged reads count as "the answer has stopped growing". */
 const QUIET_POLLS = 3
 
+/**
+ * How long to wait for the chat page to show the prompt as a turn before
+ * concluding it never accepted it.
+ *
+ * A logged-out chat still renders a composer, so the text can be typed and
+ * Enter pressed without complaint; the prompt simply never becomes part of the
+ * conversation. Short, because the answer to "why did nothing happen" should be
+ * "you are not logged in", not a minute of silence.
+ */
+const ACCEPT_PROBE_MS = 6_000
+
 /** Default overall deadline. */
 const DEFAULT_TIMEOUT_MS = 120_000
 
@@ -357,10 +368,13 @@ export interface TranslationEngine {
 export const TRANSLATION_ENGINES: readonly TranslationEngine[] = [
   {
     id: 'youdao',
-    name: '有道翻译',
-    // 有道 accepts the text and the language pair as URL parameters.
-    url: (text, target) =>
-      `https://fanyi.youdao.com/?${new URLSearchParams({ en: 'zh-CHS', zh: 'auto', type: 'WEB', ie: 'utf-8', source: 'url', query: text, target })}`,
+    name: '有道词典',
+    // The DICTIONARY, not the sentence translator: a single word is an
+    // explanation request, and `dict.youdao.com` answers it with entries,
+    // phonetics and examples. The sentence translator at fanyi.youdao.com
+    // does not carry a whole sentence usefully through its URL form, which is
+    // why a phrase is routed to Bing instead.
+    url: (text) => `https://dict.youdao.com/?${new URLSearchParams({ key: text })}`,
   },
   {
     id: 'bing',
@@ -628,6 +642,9 @@ export async function askDeepSeekWeb(
   onProgress?.('waiting')
   let previousLength = -1
   let quiet = 0
+  // How long to keep waiting for the page to ACCEPT the prompt before concluding
+  // it never will.
+  const acceptBy = Math.min(deadline, Date.now() + ACCEPT_PROBE_MS)
   while (Date.now() < deadline) {
     await delay(Math.min(pollMs, Math.max(0, deadline - Date.now())))
     const read = await api.text({ maxChars: 8_000 })
@@ -640,6 +657,16 @@ export async function askDeepSeekWeb(
     }
     const pageText = read.value.text
     if (looksSignedOut(pageText)) return { kind: 'login-required' }
+    // The page never showed the prompt as a turn. Typing and Enter both
+    // "succeed" against a logged-out chat - the composer accepts the text and
+    // the key press is swallowed - so the only honest reading is that the page
+    // did not accept it. Reporting that now is the difference between a user
+    // learning "log in first" in a few seconds and watching a button do nothing
+    // for the full ninety.
+    const promptAccepted = pageText.includes(prompt.trim().slice(0, 40))
+    if (!promptAccepted && Date.now() > acceptBy) {
+      return { kind: 'login-required' }
+    }
     const answer = extractAnswer(pageText)
     // Before the assistant types anything, the page ends with the user's own
     // turn, and the cut from there is the prompt that was just sent. Treating

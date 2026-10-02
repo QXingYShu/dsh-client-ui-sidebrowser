@@ -196,19 +196,31 @@ describe('single-instance mount guard', () => {
 })
 
 describe('plugin config schema', () => {
-  it('defaults to enabled, windowed, and a one-second half-scale capture', () => {
-    // These are the values that make a fresh install "just work": a visible
-    // Chrome (the user signs in to DeepSeek there) captured at 1 Hz and 0.5x.
+  it('defaults to enabled, headless, and a two-second half-scale capture', () => {
+    // Headless is the default now: the page belongs in the sidebar and nothing
+    // should pop up in front of the conversation. A user who needs the real
+    // window - to sign in by hand, say - turns it on explicitly.
     // The schema hands back `Volatile` references by design, so the effective
     // values are read exactly as `applyImpl` reads them.
     const parsed = Config({}) as Config
     expect(readConfigField(parsed.enabled, false)).toBe(true)
-    expect(readConfigField(parsed.headless, true)).toBe(false)
+    expect(readConfigField(parsed.headless, false)).toBe(true)
     expect(readConfigField(parsed.port, 9222)).toBe(0)
     expect(readConfigField(parsed.executablePath, 'x')).toBe('')
     expect(readConfigField(parsed.userDataDir, 'x')).toBe('')
     expect(readConfigField(parsed.captureIntervalMs, 250)).toBe(1000)
     expect(readConfigField(parsed.captureScale, 0.2)).toBe(0.5)
+  })
+
+  it('keeps the browser headless unless a window is asked for', () => {
+    // Reported as "why does it open a new Chrome window - I wanted it inside the
+    // DSH sidebar". The page belongs in the panel, so no window should appear on
+    // a fresh install; the real window is opt-in, for signing in by hand.
+    const parsed = Config({}) as Config
+    expect(readConfigField(parsed.headless, false)).toBe(true)
+    // Asking for a window is one setting away.
+    const asked = Config({ headless: false }) as Config
+    expect(readConfigField(asked.headless, true)).toBe(false)
   })
 
   it('accepts an in-band capture setting and rejects one out of band', () => {

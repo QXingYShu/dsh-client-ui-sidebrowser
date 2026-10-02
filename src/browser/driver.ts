@@ -282,7 +282,8 @@ function resolveUserDataDir(configured: string | undefined): string {
  */
 export class BrowserDriver {
   /** Resolved config; defaults are applied per-field so an empty config is valid. */
-  private readonly options: BrowserDriverOptions
+  /** Launch configuration. Mutable only by the window toggle, which relaunches. */
+  private options: BrowserDriverOptions
 
   /** The Chrome child process, while it is running. */
   private process: ChildProcess | undefined
@@ -295,6 +296,33 @@ export class BrowserDriver {
 
   /** The id of the tab commands currently act on. */
   private selectedTabId: string | undefined
+
+  /**
+   * Show or hide the real Chrome window.
+   *
+   * Chrome cannot add or remove its window at runtime, so this relaunches it in
+   * the requested mode against the SAME profile directory - which is what makes
+   * it safe for signing in: the session is in the profile, not in the window.
+   * Open tabs are re-opened afterwards by URL, so nothing the user had is lost.
+   *
+   * @param visible - true to show a window, false to go back to headless.
+   * @returns nothing; throws {@link BrowserError} when the relaunch fails.
+   */
+  async setWindowVisible(visible: boolean): Promise<void> {
+    const wanted = !visible
+    if (this.options.headless === wanted) return
+    // Remember where the user was, so the window reappears on the same pages.
+    const urls: string[] = []
+    for (const tab of this.tabs.values()) {
+      if (typeof tab.url === 'string' && tab.url !== '') urls.push(tab.url)
+    }
+    await this.shutdownBrowser()
+    this.options = { ...this.options, headless: wanted }
+    await this.launch()
+    for (const url of urls.slice(0, 3)) {
+      await this.open(url).catch(() => undefined)
+    }
+  }
 
   /**
    * Bumped whenever the tab model changes locally (`open`, `closeTab`).
@@ -341,6 +369,9 @@ export class BrowserDriver {
   /** Set while a launch is in progress, so concurrent callers share one launch. */
   private launching: Promise<void> | undefined
 
+  /** The debugging port this driver launched on, kept across a window toggle. */
+  private attachedPort: number | undefined
+
   /** Set once the driver is disposed, to reject any late use. */
   private disposed = false
 
@@ -348,7 +379,7 @@ export class BrowserDriver {
    * @param options - browser launch configuration; every field is optional.
    */
   constructor(options: BrowserDriverOptions = {}) {
-    this.options = options
+    this.options = { ...options }
   }
 
   /**
@@ -388,7 +419,12 @@ export class BrowserDriver {
     }
     const userDataDir = resolveUserDataDir(this.options.userDataDir)
     await mkdir(userDataDir, { recursive: true })
-    const port = this.options.port && this.options.port > 0 ? this.options.port : await this.pickFreePort()
+    // A chosen port is remembered across relaunches so toggling the window does
+    // not hand the old Chrome's port to an unrelated process in between.
+    const port = this.options.port && this.options.port > 0
+      ? this.options.port
+      : this.attachedPort ?? await this.pickFreePort()
+    this.attachedPort = port
     const args = [
       `--remote-debugging-port=${port}`,
       `--user-data-dir=${userDataDir}`,
@@ -1417,6 +1453,32 @@ export class BrowserDriver {
   }
 
   /**
+   * Stop the browser and drop everything it owned, without retiring the driver.
+   *
+   * Shared by {@link dispose} and by the window toggle, which needs the same
+   * teardown but must keep working afterwards. Chrome's session lives in the
+   * profile directory, not in the process, so relaunching loses no sign-in.
+   * @returns void; killing an already-dead process is fine.
+   */
+  private async shutdownBrowser(): Promise<void> {
+    this.tabs.clear()
+    this.tabCreationOrder.clear()
+    this.devicePixelRatios.clear()
+    this.globalObjectIds.clear()
+    this.selectedTabId = undefined
+    this.client?.dispose()
+    this.client = undefined
+    const child = this.process
+    this.process = undefined
+    if (child !== undefined && child.exitCode === null) {
+      child.kill()
+    }
+    // Give the killed process a moment to release the profile lock, otherwise
+    // the relaunch starts and finds the directory still in use.
+    await new Promise(resolve => setTimeout(resolve, 150))
+  }
+
+  /**
    * Dispose the driver: close tabs' CDP session, kill the browser, clear state.
    *
    * Killing Chrome is intentional — it is a process this driver spawned into a
@@ -1426,17 +1488,7 @@ export class BrowserDriver {
   async dispose(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
-    this.tabs.clear()
-    this.tabCreationOrder.clear()
-    this.devicePixelRatios.clear()
-    this.selectedTabId = undefined
-    this.client?.dispose()
-    this.client = undefined
-    const child = this.process
-    this.process = undefined
-    if (child !== undefined && child.exitCode === null) {
-      child.kill()
-    }
+    await this.shutdownBrowser()
   }
 }
 

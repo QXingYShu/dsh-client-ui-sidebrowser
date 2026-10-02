@@ -347,6 +347,20 @@ export function makeSidebrowserRoutes(
     ...(await driver.snapshot()),
   }))
 
+  /**
+   * Show or hide the real Chrome window.
+   *
+   * The browser runs headless so the page lives in the sidebar and nothing pops
+   * up in front of the conversation. Signing into DeepSeek needs the real window
+   * once, so this is the honest way to get it: the user asks, the window appears
+   * with the session intact, and they ask again to put it away.
+   */
+  const windowMode = post('window', async body => {
+    const show = readBoolean(body, 'show') === true
+    await driver.setWindowVisible(show)
+    return { ok: true, visible: show }
+  })
+
   const navigate = post('navigate', async body => {
     const url = readString(body, 'url') ?? readString(body, 'target')
     if (url === undefined) throw new BrowserError('bad-url', 'pass a url or a known shortcut name')
@@ -548,5 +562,5 @@ export function makeSidebrowserRoutes(
     }
   })
 
-  return [config, state, navigate, back, forward, reload, tabs, openTab, closeTab, selectTab, screenshot, frame, text, click, type, key, scroll, evalSafe]
+  return [config, state, windowMode, navigate, back, forward, reload, tabs, openTab, closeTab, selectTab, screenshot, frame, text, click, type, key, scroll, evalSafe]
 }

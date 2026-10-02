@@ -61,7 +61,14 @@ export interface Config {
   port?: Volatile<number>
   /** Chrome profile directory; absent means a stable per-user directory under the temp dir. */
   userDataDir?: Volatile<string>
-  /** Start Chrome without a visible window. Off by default: the user signs in here. */
+  /**
+   * Show the real Chrome window on the desktop.
+   *
+   * OFF by default, which is the whole point of the sidebar: the browser runs
+   * headless and the page appears in the panel, so nothing pops up in front of
+   * the conversation. Turn it on only when you need the real window itself -
+   * completing a sign-in by hand, for instance - then turn it off again.
+   */
   headless?: Volatile<boolean>
   /** Milliseconds between background screenshot captures. */
   captureIntervalMs?: Volatile<number>
@@ -138,7 +145,7 @@ export const Config = z.object({
   executablePath: z.string().default('').volatile(),
   port: z.number().default(0).volatile(),
   userDataDir: z.string().default('').volatile(),
-  headless: z.boolean().default(false).volatile(),
+  headless: z.boolean().default(true).volatile(),
   captureIntervalMs: z.number().min(250).max(10_000).default(1000).volatile(),
   captureScale: z.number().min(0.2).max(1).default(0.5).volatile(),
   selectionPopup: z.boolean().default(true).volatile(),
@@ -269,7 +276,7 @@ function applyImpl(ctx: Context, config?: Config): void {
     executablePath: readConfigField(config?.executablePath, '') || undefined,
     port: readConfigField(config?.port, 0),
     userDataDir: readConfigField(config?.userDataDir, '') || undefined,
-    headless: readConfigField(config?.headless, false),
+    headless: readConfigField(config?.headless, true),
   })
   const stream = new ScreenshotStream(driver, {
     intervalMs: readConfigField(config?.captureIntervalMs, 1000),
@@ -319,7 +326,7 @@ const settingsSnapshot = (): Record<string, unknown> => ({
   executablePath: readConfigField(config?.executablePath, ''),
   port: readConfigField(config?.port, 0),
   userDataDir: readConfigField(config?.userDataDir, ''),
-  headless: readConfigField(config?.headless, false),
+  headless: readConfigField(config?.headless, true),
   captureScale: readConfigField(config?.captureScale, 0.5),
 })
 
