@@ -202,6 +202,32 @@ export function SideBrowserPanel(props: SideBrowserPanelProps): React.ReactEleme
       : t('panel.connection.unavailable')
   const shownError = commandError ?? tabStrip.error ?? live.error
   const selectedTab = tabStrip.tabs.find(tab => tab.selected)
+
+  // Report to the Host what this panel actually holds AND what its <img> says.
+  // A frame in hand with an image that never painted is a different failure from
+  // a frame that never arrived, and only the browser can tell them apart - so the
+  // browser is asked, rather than inferred from the outside.
+  const frameRef = useRef(live.frame)
+  frameRef.current = live.frame
+  useEffect(() => {
+    const image = document.querySelector<HTMLImageElement>('[data-dsh-sidebrowser-panel] img[data-dsh-frame]')
+    void api.reportClient({
+      build: BUILD_STAMP,
+      phase,
+      href: typeof window === 'undefined' ? '' : window.location.href,
+      frameId: live.frame?.id ?? null,
+      frameBytes: live.frame?.data.length ?? 0,
+      polling: live.polling,
+      error: shownError ?? null,
+      imgPresent: image !== null,
+      imgComplete: image?.complete ?? null,
+      imgNaturalWidth: image?.naturalWidth ?? null,
+      imgClientWidth: image?.clientWidth ?? null,
+      imgClientHeight: image?.clientHeight ?? null,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    })
+  }, [api, live.frame?.id, live.frame?.data.length, live.polling, phase, shownError])
   // A plain, always-visible report of what the panel is actually receiving.
   // Blank panels have been hard to diagnose from the outside: the Host can be
   // serving frames perfectly while the client never receives them, and the two
@@ -280,7 +306,7 @@ export function SideBrowserPanel(props: SideBrowserPanelProps): React.ReactEleme
         <div className={css.viewport}>
           {live.frame === undefined
             ? <p className={css.viewportPlaceholder}>{phaseText}</p>
-            : <img className={css.frame} src={frameSrc(live.frame)} alt={t('panel.screenshot.alt')} />}
+            : <img className={css.frame} data-dsh-frame="" src={frameSrc(live.frame)} alt={t('panel.screenshot.alt')} />}
         </div>
       )}
 

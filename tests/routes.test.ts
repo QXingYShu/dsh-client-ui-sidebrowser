@@ -202,13 +202,42 @@ describe('route table', () => {
     expect((recorded.body as { frame?: { data?: string } }).frame?.data).toBe('AAAA')
   })
 
-  it('registers every documented endpoint under one prefix', () => {
+  it('remembers what the browser half reported about itself', async () => {
+    // The client cannot be observed from outside: a frame it holds and an image
+    // that never painted look identical on screen. So the client reports, and
+    // the Host keeps the last word - next to its OWN view, so a disagreement
+    // between the two halves is visible in one place.
+    const routes = makeRoutes(makeDriverStub().driver)
+    const report = {
+      build: 'dsh-7b0b4a69',
+      phase: 'ready',
+      frameId: 19,
+      frameBytes: 18_008,
+      imgPresent: true,
+      imgComplete: false,
+      imgNaturalWidth: 0,
+    }
+    const posted = await call(routes, `${SIDEBROWSER_API_PREFIX}/client-report`, sameOrigin({
+      method: 'POST',
+      contentType: 'application/json',
+      body: report,
+    }))
+    expect(posted.status).toBe(200)
+
+    const read = await call(routes, `${SIDEBROWSER_API_PREFIX}/client-report-state`, sameOrigin({ method: 'GET' }))
+    expect(read.status).toBe(200)
+    expect(read.body).toMatchObject({ ok: true, report: { ...report } })
+  })
+
+it('registers every documented endpoint under one prefix', () => {
     // One prefix means the fence is applied in exactly one place; a route
     // registered outside it would be unfenced by construction.
     const paths = [...makeRoutes(makeDriverStub().driver).keys()].sort()
     expect(paths).toEqual([
       `${SIDEBROWSER_API_PREFIX}/back`,
       `${SIDEBROWSER_API_PREFIX}/click`,
+      `${SIDEBROWSER_API_PREFIX}/client-report`,
+      `${SIDEBROWSER_API_PREFIX}/client-report-state`,
       `${SIDEBROWSER_API_PREFIX}/config`,
       `${SIDEBROWSER_API_PREFIX}/eval-safe`,
       `${SIDEBROWSER_API_PREFIX}/forward`,

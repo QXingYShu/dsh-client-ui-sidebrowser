@@ -253,6 +253,17 @@ export function makeSidebrowserRoutes(
   readConfig?: () => Record<string, unknown>,
 ): WebRoute[] {
   /**
+   * The browser half's last self-report.
+   *
+   * A blank panel has two indistinguishable causes - the Host never delivered
+   * a frame, or the client received one and failed to paint it - and they look
+   * identical on screen. Having the client report what it actually holds turns
+   * that into something readable from the Host side, without asking anyone to
+   * squint at a screenshot of a one-pixel font.
+   */
+  let lastClientReport: Record<string, unknown> | undefined
+
+  /**
    * Apply the trust fence, answering 403 itself when the request is untrusted.
    * @param req - the incoming request.
    * @param res - the response.
@@ -352,6 +363,31 @@ export function makeSidebrowserRoutes(
    * asks for them once at startup.
    */
   const config = get('config', async () => ({ ok: true, config: readConfig?.() ?? {} }))
+
+  /** The client half's account of itself: which build, and what it holds. */
+  const clientReport = post('client-report', async body => {
+    lastClientReport = {
+      ...body,
+      reportedAt: new Date().toISOString(),
+      // The Host's own view, next to the client's, so a disagreement between
+      // them is visible in one place.
+      hostFrameId: stream.latest()?.id ?? null,
+      hostHasFrame: stream.latest() !== undefined,
+    }
+    return { ok: true }
+  })
+
+  /**
+   * Read the last report back.
+   *
+   * A distinct path rather than the same one: the route table is keyed by path,
+   * so a GET and a POST sharing `/client-report` would leave only one of them
+   * reachable.
+   */
+  const clientReportState = get('client-report-state', async () => ({
+    ok: true,
+    report: lastClientReport ?? null,
+  }))
 
   const state = get('state', async () => ({
     ok: true,
@@ -596,5 +632,5 @@ export function makeSidebrowserRoutes(
     }
   })
 
-  return [config, state, windowMode, navigate, back, forward, reload, tabs, openTab, closeTab, selectTab, screenshot, frame, text, click, type, key, scroll, evalSafe]
+  return [config, state, clientReport, clientReportState, windowMode, navigate, back, forward, reload, tabs, openTab, closeTab, selectTab, screenshot, frame, text, click, type, key, scroll, evalSafe]
 }

@@ -184,10 +184,12 @@
   padding: 4px 6px;
   border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsw-alias-label-secondary);
   font-family: var(--dsw-font-mono, ui-monospace, monospace);
-  font-size: 11px;
-  line-height: 1.4;
+  /* Readable in a screenshot: this line exists to be read, and at 11px it was
+     not - a cropped screenshot of it came back as an illegible smear. */
+  font-size: 13px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
   flex-shrink: 0;
 }

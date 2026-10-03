@@ -289,6 +289,21 @@ export class SideBrowserApi {
   }
 
   /**
+ * Tell the Host what this browser half is actually doing.
+ *
+ * A blank panel has two indistinguishable causes - the Host never delivered a
+ * frame, or the client received one and failed to paint it - and both look
+ * identical from outside. Reporting the `<img>`'s own `complete` and
+ * `naturalWidth` turns that into something readable, without asking anyone to
+ * read a one-pixel font off a screenshot.
+ * @param report - the fields to record.
+ * @returns nothing; a failed report is not worth surfacing to the user.
+ */
+async reportClient(report: Record<string, unknown>): Promise<void> {
+  await this.post('client-report', report).catch(() => undefined)
+}
+
+/**
    * Read the Host's resolved plugin settings.
    *
    * This is the channel the client actually has: the Host holds the
