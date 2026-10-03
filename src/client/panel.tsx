@@ -34,6 +34,16 @@ import { clampPollMs, frameSrc, useLiveFrame } from './panel/use-live-frame.ts'
 import { useBrowserState, useTabs } from './panel/use-browser-state.ts'
 import { builtInShortcuts, type ShortcutEntry } from './shortcuts.ts'
 
+/**
+ * Identifies this exact build in the diagnostics line.
+ *
+ * A stale cached bundle and a broken live one look identical on screen, so the
+ * panel states which build it is rather than leaving that to be guessed. The
+ * value is stamped in by the build (see the css-injection plugin in
+ * `tsdown.config.ts`), which is the only place that knows the final bytes.
+ */
+const BUILD_STAMP = (globalThis as { __DSH_SIDEBROWSER_BUILD__?: string }).__DSH_SIDEBROWSER_BUILD__ ?? 'unstamped'
+
 /** Props the tab seat injects into the body. */
 export interface SideBrowserPanelProps {
   /** Route client; shared across bodies so remounts do not restart polls. */
@@ -192,6 +202,11 @@ export function SideBrowserPanel(props: SideBrowserPanelProps): React.ReactEleme
       : t('panel.connection.unavailable')
   const shownError = commandError ?? tabStrip.error ?? live.error
   const selectedTab = tabStrip.tabs.find(tab => tab.selected)
+  // A plain, always-visible report of what the panel is actually receiving.
+  // Blank panels have been hard to diagnose from the outside: the Host can be
+  // serving frames perfectly while the client never receives them, and the two
+  // look identical on screen. One screenshot of this line separates them.
+  const diagnostics = `build ${BUILD_STAMP} · phase ${phase} · frame ${live.frame === undefined ? 'none' : `#${live.frame.id} ${live.frame.data.length}b`} · poll ${live.polling ? 'busy' : 'idle'}${shownError === undefined ? '' : ` · error ${shownError}`}`
 
   return (
     <div className={css.root} data-dsh-sidebrowser-panel="">
@@ -248,6 +263,8 @@ export function SideBrowserPanel(props: SideBrowserPanelProps): React.ReactEleme
         <span className={css.statusDot} data-phase={phase} />
         <span className={css.statusText}>{shownError ?? phaseText}</span>
       </div>
+
+      <p className={css.diagnostics} title="Live diagnostics">{diagnostics}</p>
 
       {textOpen ? (
         <pre className={css.textView}>

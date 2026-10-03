@@ -179,6 +179,19 @@
   line-height: 1.4;
 }
 
+.diagnostics {
+  margin: 0;
+  padding: 4px 6px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
+}
+
 /* --- Browser tab strip ----------------------------------------------------- */
 
 .tabStrip {

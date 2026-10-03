@@ -101,32 +101,67 @@ function clientCssInjection(cssFileName = 'style.css'): Plugin {
       } catch {
         return
       }
-      // Only the wrapped client chunk carries the loader call, and only once.
-      if (!code.includes('__ModuleLoader__.load') || code.includes('data-plugin-css')) return
+      // Only the wrapped client chunk carries the loader call.
+      if (!code.includes('__ModuleLoader__.load')) return
 
       const at = code.indexOf(FACTORY_MARKER)
       if (at === -1) return
-      const insertAt = at + FACTORY_MARKER.length
+      const factoryEnd = at + FACTORY_MARKER.length
 
+      // Build id. Derived from the emitted bytes, and REPLACED every build so
+      // a rebuild always moves it - that is what lets the panel tell a stale
+      // cached bundle apart from a fresh one on screen.
+      const stamp = `dsh-${shortHash(`${css}\u0000${code}`)}`
+      const stampLine = `${STAMP_MARKER}\n    globalThis.__DSH_SIDEBROWSER_BUILD__ = ${JSON.stringify(stamp)};`
+
+      // Styles are re-injected whenever they are missing, and never twice.
+      const hasCss = code.includes('data-plugin-css')
       const tagId = `${CLIENT_ID}/${cssFileName}`
-      const prologue = [
-        '',
-        '// --- dsh-sidebrowser: inline stylesheet (see tsdown.config.ts) ---',
-        `    (() => {`,
-        `      const tagId = ${JSON.stringify(tagId)};`,
-        `      if (typeof document === "undefined") return;`,
-        `      if (document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") !== null) return;`,
-        `      const tag = document.createElement("style");`,
-        `      tag.dataset.plugin = ${JSON.stringify(CLIENT_ID)};`,
-        `      tag.dataset.pluginCss = tagId;`,
-        `      tag.textContent = ${JSON.stringify(css)};`,
-        `      document.head.appendChild(tag);`,
-        `    })();`,
-      ].join('\n')
+      const cssPrologue = hasCss
+        ? ''
+        : [
+          '// --- dsh-sidebrowser: inline stylesheet (see tsdown.config.ts) ---',
+          `    (() => {`,
+          `      const tagId = ${JSON.stringify(tagId)};`,
+          `      if (typeof document === "undefined") return;`,
+          `      if (document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") !== null) return;`,
+          `      const tag = document.createElement("style");`,
+          `      tag.dataset.plugin = ${JSON.stringify(CLIENT_ID)};`,
+          `      tag.dataset.pluginCss = tagId;`,
+          `      tag.textContent = ${JSON.stringify(css)};`,
+          `      document.head.appendChild(tag);`,
+          `    })();`,
+        ].join('\n')
 
-      await writeFile(chunkPath, code.slice(0, insertAt) + prologue + code.slice(insertAt), 'utf8')
+      // One splice for both: styles first, then the id, both inside the factory
+      // body so they run when the loader materialises it.
+      const withoutStamp = code.includes(STAMP_MARKER)
+        ? code.replace(/\n?\s*\/\/ --- dsh-sidebrowser build ---\n\s*globalThis\.__DSH_SIDEBROWSER_BUILD__ = "[^"]*";/, '')
+        : code
+      const fresh = withoutStamp.includes('data-plugin-css') ? withoutStamp : insertAt(withoutStamp, factoryEnd, cssPrologue)
+      const out = insertAt(fresh, fresh.indexOf(FACTORY_MARKER) + FACTORY_MARKER.length, stampLine)
+
+      if (out !== code) await writeFile(chunkPath, out, 'utf8')
     },
   }
+}
+
+/** Insert a block at an offset, keeping the surrounding text intact. */
+function insertAt(code: string, offset: number, block: string): string {
+  return `${code.slice(0, offset)}\n    ${block}${code.slice(offset)}`
+}
+
+/** Marker comment above the build-id assignment, so a rebuild can find it. */
+const STAMP_MARKER = '// --- dsh-sidebrowser build ---'
+
+/** A short, stable digest - enough to tell two builds apart on screen. */
+function shortHash(input: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0').slice(0, 8)
 }
 
 export default defineConfig([
