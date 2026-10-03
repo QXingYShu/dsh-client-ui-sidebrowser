@@ -367,9 +367,6 @@ export class BrowserDriver {
   private readonly tabCreationOrder = new Map<string, number>()
   private nextCreationOrder = 0
 
-  /** Renderer device pixel ratio per flat-mode session, for capture scaling. */
-  private readonly devicePixelRatios = new Map<string, number>()
-
   /**
    * Remote object id of each tab's page global scope, keyed by CDP session id.
    *
@@ -587,9 +584,6 @@ export class BrowserDriver {
     this.tabCreationOrder.delete(tabId)
     if (tab !== undefined) {
       this.globalObjectIds.delete(tab.sessionId)
-      // Session-scoped caches belong to the destroyed renderer; keeping them
-      // would apply a stale pixel ratio to a reused session id.
-      this.devicePixelRatios.delete(tab.sessionId)
     }
     if (this.selectedTabId === tabId) {
       const next = this.tabs.keys().next()
@@ -870,9 +864,6 @@ export class BrowserDriver {
       // A navigation is about to replace the execution context, so the cached
       // global handle is dropped now rather than being recovered by the retry path.
       this.globalObjectIds.delete(tab.sessionId)
-      // The next document may render at a different pixel ratio, so the one
-      // cached for this session is no longer valid.
-      this.devicePixelRatios.delete(tab.sessionId)
       await this.waitForLoad(tab.sessionId)
       tab.url = url
       return await this.snapshot(tab.id)
@@ -1363,91 +1354,43 @@ export class BrowserDriver {
     })
     const viewport = (metrics as { cssLayoutViewport?: { clientWidth?: number, clientHeight?: number } } | undefined)?.cssLayoutViewport
     const content = (metrics as { cssContentSize?: { width?: number, height?: number } } | undefined)?.cssContentSize
-    const viewWidth = typeof viewport?.clientWidth === 'number' ? viewport.clientWidth : undefined
-    const viewHeight = typeof viewport?.clientHeight === 'number' ? viewport.clientHeight : undefined
-    const contentWidth = typeof content?.width === 'number' ? content.width : undefined
-    const contentHeight = typeof content?.height === 'number' ? content.height : undefined
 
-    // Two capture paths, because they answer different questions.
+    // Capture through the COMPOSITOR, always.
     //
-    // FULL PAGE goes through the compositor. Only that path can see past the
-    // fold: measured, a 3000px page returns 758x3000 through the compositor and
-    // the viewport height through the renderer. It is a one-off, user-initiated
-    // capture, so the cost is irrelevant - but it IS the path that flashes a
-    // visible window, so it must not be the one a poll timer calls.
-    if (fullPage && contentWidth !== undefined && contentHeight !== undefined) {
-      const result = await client.sendObject('Page.captureScreenshot', {
-        format: 'png',
-        fromSurface: true,
-        captureBeyondViewport: true,
-        clip: { x: 0, y: 0, width: contentWidth, height: contentHeight, scale },
-      }, tab.sessionId)
-      return requireFrameData(result)
-    }
-
-    // THE LIVE VIEW goes through the renderer, which does not touch the window
-    // the user is looking at. That is the whole point: polling it every second
-    // must not make their browser flash.
+    // This is not a preference, it is what makes the picture correct. Measured on
+    // the same DeepSeek sign-in page in headless Chrome: the compositor returned
+    // 49453 bytes of the real page (logo, inputs, QR code), the renderer returned
+    // 15400 bytes of blank white. The renderer path excludes GPU-composited
+    // layers, so essentially every SPA - which is most of the modern web -
+    // arrives as an empty image. An earlier round switched the live view to the
+    // renderer to stop a *visible* window flashing, and that is exactly what
+    // blanked the sidebar.
     //
-    // The renderer honours neither `clip` nor `captureBeyondViewport` (measured:
-    // four different clip requests returned byte-identical images), so there is
-    // no way to downscale it at capture time.
-    //
-    // At scale 1 - which is what change detection runs at, and what an
-    // unscaled screenshot asks for - the natural surface is already the right
-    // answer and NO override is applied: resizing the metrics on every poll
-    // reflows the page each time, and a capture taken mid-reflow can return the
-    // pre-change pixels, so an edited page reads as unchanged.
-    if (viewWidth === undefined || viewHeight === undefined || viewWidth <= 0 || viewHeight <= 0) {
+    // With the browser headless, which is the default, there is no window on
+    // screen to flash in the first place, so the flashing objection does not
+    // apply. A user who raises the real window sees the sidebar image pulse at
+    // the poll interval; that is the price of an accurate view, and it is the
+    // right way round.
+    const width = fullPage
+      ? (typeof content?.width === 'number' ? content.width : undefined)
+      : (typeof viewport?.clientWidth === 'number' ? viewport.clientWidth : undefined)
+    const height = fullPage
+      ? (typeof content?.height === 'number' ? content.height : undefined)
+      : (typeof viewport?.clientHeight === 'number' ? viewport.clientHeight : undefined)
+    if (width === undefined || height === undefined || width <= 0 || height <= 0) {
       throw new BrowserError('capture-failed', 'the page reported no size to capture')
     }
-    if (scale === 1) {
-      const result = await client.sendObject('Page.captureScreenshot', { format: 'png', fromSurface: false }, tab.sessionId)
-      return requireFrameData(result)
-    }
 
-    const ratio = await this.devicePixelRatio(client, tab.sessionId)
-    const override = {
-      width: Math.max(1, Math.round(viewWidth * scale)),
-      height: Math.max(1, Math.round(viewHeight * scale)),
-      deviceScaleFactor: ratio,
-      mobile: false,
-    }
-    let applied = false
-    try {
-      await client.send('Emulation.setDeviceMetricsOverride', override, tab.sessionId)
-      applied = true
-      const result = await client.sendObject('Page.captureScreenshot', { format: 'png', fromSurface: false }, tab.sessionId)
-      return requireFrameData(result)
-    } finally {
-      // The page must be left exactly as found: a lingering metrics override
-      // would resize the user's real window and survive a navigation.
-      if (applied) {
-        await client.send('Emulation.clearDeviceMetricsOverride', {}, tab.sessionId).catch(() => undefined)
-      }
-    }
-  }
-
-  /**
-   * The device pixel ratio of a tab's renderer, cached per session.
-   *
-   * Only the non-compositor capture path needs it, and it cannot change without
-   * a navigation that would give the session a new id, so one small evaluate
-   * per page is enough.
-   * @param client - the CDP client.
-   * @param sessionId - the tab's flat-mode session id.
-   * @returns the ratio, or 1 when it cannot be read.
-   */
-  private async devicePixelRatio(client: CdpClient, sessionId: string): Promise<number> {
-    const cached = this.devicePixelRatios.get(sessionId)
-    if (cached !== undefined) return cached
-    const read = await client
-      .sendObject('Runtime.evaluate', { expression: 'window.devicePixelRatio' }, sessionId)
-      .catch(() => undefined)
-    const value = (read as { result?: { value?: unknown } } | undefined)?.result?.value
-    const ratio = typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1
-    this.devicePixelRatios.set(sessionId, ratio)
-    return ratio
+    const result = await client.sendObject('Page.captureScreenshot', {
+      format: 'png',
+      fromSurface: true,
+      captureBeyondViewport: fullPage,
+      // The compositor honours `clip`, including its scale, so downscaling and
+      // the full-page box are both expressed here rather than by resizing the
+      // page - resizing it reflows the document on every poll.
+      clip: { x: 0, y: 0, width, height, scale },
+    }, tab.sessionId)
+    return requireFrameData(result)
   }
 
   /**
@@ -1535,7 +1478,6 @@ export class BrowserDriver {
   private async shutdownBrowser(): Promise<void> {
     this.tabs.clear()
     this.tabCreationOrder.clear()
-    this.devicePixelRatios.clear()
     this.globalObjectIds.clear()
     this.selectedTabId = undefined
     this.client?.dispose()
